@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: stock-studio
+    runtime: docker
+    plan: free
+    region: oregon
+    branch: main
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /api/health
+    envVars:
+      - key: PUBLIC_MODE
+        value: "1"
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: STOCK_DATA_DIR
+        value: /app/runtime-data
+      - key: UPSCALE_THREADS
+        value: "1"
