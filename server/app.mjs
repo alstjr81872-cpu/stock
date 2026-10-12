@@ -56,8 +56,9 @@ const settingsSchema = z.object({
     .optional(),
   geminiModel: z
     .string()
-    .regex(/^[a-zA-Z0-9._-]+$/)
-    .max(120)
+    .trim()
+    .transform((value) => value.replace(/^models\//, ""))
+    .pipe(z.string().regex(/^[a-zA-Z0-9._-]+$/).max(120))
     .optional(),
   openaiKey: z.string().max(500).optional(),
   geminiKey: z.string().max(500).optional(),

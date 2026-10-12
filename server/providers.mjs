@@ -21,9 +21,52 @@ export async function jsonRequest(url, options = {}, fetcher = fetch) {
         : response.status === 429
           ? "요청 한도 또는 잔액을 확인해주세요."
           : "외부 서비스 요청에 실패했습니다.";
-    throw new Error(`${kind} (HTTP ${response.status})`);
+    const error = new Error(`${kind} (HTTP ${response.status})`);
+    error.status = response.status;
+    throw error;
   }
   return response.json();
+}
+
+// A retired or inaccessible model can return 404 even with a valid API key.
+export async function geminiRequest(model, options, fetcher = fetch, onModel = () => {}) {
+  const base = "https://generativelanguage.googleapis.com/v1beta/models";
+  const normalized = model.trim().replace(/^models\//, "");
+  const run = (name) => jsonRequest(`${base}/${encodeURIComponent(name)}:generateContent`, options, fetcher);
+  try {
+    const result = await run(normalized);
+    onModel(normalized);
+    return result;
+  } catch (error) {
+    if (error.status !== 404) throw error;
+  }
+  const available = [];
+  let pageToken;
+  for (let page = 0; page < 10; page++) {
+    const query = new URLSearchParams({ pageSize: "1000" });
+    if (pageToken) query.set("pageToken", pageToken);
+    const data = await jsonRequest(`${base}?${query}`, { headers: options.headers }, fetcher);
+    available.push(...(data.models || []));
+    pageToken = data.nextPageToken;
+    if (!pageToken) break;
+  }
+  // Limit automatic recovery to stable general-purpose Flash models with
+  // generateContent. Exclude image-generation, audio, live and preview models.
+  const candidates = available.filter(m =>
+    /^models\/gemini-\d+(?:\.\d+)?-flash(?:-\d+)?$/.test(m.name) &&
+    m.supportedGenerationMethods?.includes("generateContent") &&
+    m.name !== `models/${normalized}`
+  ).sort((a, b) => b.name.localeCompare(a.name, undefined, { numeric: true }));
+  if (!candidates.length) throw new Error("Gemini 모델을 찾을 수 없습니다 (HTTP 404). Google AI Studio에서 이 키로 사용 가능한 이미지 분석 모델을 확인하고 설정의 Gemini 모델을 변경해주세요.");
+  const selected = candidates[0].name.replace(/^models\//, "");
+  try {
+    const result = await run(selected);
+    onModel(selected);
+    return result;
+  } catch (error) {
+    if (error.status === 404) throw new Error("Gemini 대체 모델도 사용할 수 없습니다 (HTTP 404). Google AI Studio의 모델 접근 권한을 확인해주세요.");
+    throw error;
+  }
 }
 
 export async function generateMetadata(file, asset, settings, fetcher = fetch) {
@@ -84,8 +127,8 @@ export async function generateMetadata(file, asset, settings, fetcher = fetch) {
       (settings.environmentCredentials !== false && process.env.GEMINI_API_KEY);
     if (!key) throw new Error("설정에서 Gemini API 키를 입력해주세요.");
     const model = settings.geminiModel || "gemini-2.5-flash";
-    const d = await jsonRequest(
-      `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
+    const d = await geminiRequest(
+      model,
       {
         method: "POST",
         headers: { "x-goog-api-key": key, "Content-Type": "application/json" },
@@ -104,6 +147,7 @@ export async function generateMetadata(file, asset, settings, fetcher = fetch) {
         }),
       },
       fetcher,
+      (actualModel) => { settings.geminiModel = actualModel; },
     );
     text = d.candidates?.[0]?.content?.parts
       ?.filter((p) => p.text)

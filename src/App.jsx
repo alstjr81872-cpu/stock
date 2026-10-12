@@ -1071,7 +1071,7 @@ function Settings({ settings, onSave, notify }) {
                 required
               />
               <span className="field-help">
-                이미지 입력과 JSON 출력을 지원하는 모델
+                이미지 분석 모델 ID · 모델이 종료되면 사용 가능한 Flash 모델로 자동 재시도
               </span>
             </label>
             {keyField(
