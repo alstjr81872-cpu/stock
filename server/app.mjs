@@ -17,6 +17,8 @@ import {
 } from "./metadata.mjs";
 import {
   generateMetadata,
+  listGeminiModels,
+  recommendGeminiModel,
   startUpscale,
   pollUpscale,
   downloadUpscale,
@@ -200,19 +202,24 @@ export function createApp({
     next();
   });
   app.use(express.json({ limit: "256kb" }));
-  const settings = () => ({
-    provider: "gemini",
-    upscaler: "local",
-    openaiModel: "gpt-4.1-mini",
-    geminiModel: "gemini-2.5-flash",
-    ftpHost: "",
-    ftpUser: "",
-    ftpPort: 21,
-    ftpMode: "explicit",
-    ftpDirectory: "/",
-    ...store.read("settings", {}),
-    environmentCredentials: !publicMode,
-  });
+  const settings = () => {
+    const value = {
+      provider: "gemini",
+      upscaler: "local",
+      openaiModel: "gpt-4.1-mini",
+      geminiModel: "auto",
+      ftpHost: "",
+      ftpUser: "",
+      ftpPort: 21,
+      ftpMode: "explicit",
+      ftpDirectory: "/",
+      ...store.read("settings", {}),
+      environmentCredentials: !publicMode,
+    };
+    // Migrate the former hard-coded default, retaining custom model IDs.
+    if (value.geminiModel === "gemini-2.5-flash") value.geminiModel = "auto";
+    return value;
+  };
   const publicSettings = () => {
     const value = settings();
     for (const name of secretNames) {
@@ -267,6 +274,14 @@ export function createApp({
     res.json({ ok: true, name: "Stock Studio", version: "0.1.0" }),
   );
   app.get("/api/settings", (_req, res) => res.json(publicSettings()));
+  app.post("/api/gemini/models", async (req, res) => {
+    const input = z.object({ key: z.string().trim().max(500).optional() }).parse(req.body);
+    const config = settings();
+    const key = input.key !== undefined ? input.key : config.geminiKey ||
+      (config.environmentCredentials !== false && process.env.GEMINI_API_KEY);
+    const models = await listGeminiModels(key, fetcher);
+    res.json({ models, recommended: recommendGeminiModel(models)?.id || null });
+  });
   app.put("/api/settings", (req, res) => {
     const patch = settingsSchema.parse(req.body);
     if (
@@ -701,7 +716,9 @@ export function createApp({
             : error.message;
     res
       .status(error.status || 400)
-      .json({ error: message || "요청을 처리하지 못했습니다." });
+      .json({ error: message || "요청을 처리하지 못했습니다.",
+        ...(error.provider ? { provider: error.provider, upstreamStatus: error.upstreamStatus } : {}),
+      });
   });
   return { app, store };
 }

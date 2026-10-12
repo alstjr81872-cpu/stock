@@ -111,3 +111,16 @@ test("settings show key status without exposing saved values, layout fits mobile
     ),
   ).toBeTruthy();
 });
+
+test('Gemini connection check sends the entered key and displays the recommended model', async ({page}) => {
+  await page.route('**/api/gemini/models', async route => {
+    expect(route.request().postDataJSON()).toEqual({key:'unsaved-test-key'});
+    await route.fulfill({json:{models:[{id:'gemini-3-flash',displayName:'Flash'}],recommended:'gemini-3-flash'}});
+  });
+  await page.goto('/');
+  await page.getByRole('button',{name:'설정 및 API 연결'}).click();
+  await page.locator('label.field').filter({hasText:'Gemini API 키'}).locator('input').fill('unsaved-test-key');
+  await page.getByRole('button',{name:'API 연결 확인 · 모델 조회'}).click();
+  await expect(page.getByRole('status')).toContainText('gemini-3-flash');
+  await expect(page.locator('input[list="gemini-model-list"]')).toHaveValue('auto');
+});

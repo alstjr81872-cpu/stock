@@ -194,7 +194,7 @@ test("both image providers receive image bytes and return validated platform met
     const result = await generateMetadata(
       filename,
       seed,
-      { provider, openaiKey: "test-only", geminiKey: "test-only" },
+      { provider, openaiKey: "test-only", geminiKey: "test-only", geminiModel: "gemini-2.5-flash" },
       async (url, options) => {
         const body = JSON.parse(options.body);
         if (provider === "openai") {

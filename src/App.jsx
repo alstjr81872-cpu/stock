@@ -950,7 +950,9 @@ function Stat({ label, value, icon: Icon, note }) {
 function Settings({ settings, onSave, notify }) {
   const [values, setValues] = useState(null),
     [secrets, setSecrets] = useState({}),
-    [saving, setSaving] = useState(false);
+    [saving, setSaving] = useState(false),
+    [models, setModels] = useState([]),
+    [checkingModels, setCheckingModels] = useState(false);
   useEffect(() => {
     if (settings)
       setValues({
@@ -1066,13 +1068,32 @@ function Settings({ settings, onSave, notify }) {
             <label className="field">
               Gemini 모델
               <input
+                list="gemini-model-list"
                 value={values.geminiModel}
                 onChange={(e) => set("geminiModel", e.target.value)}
                 required
               />
               <span className="field-help">
-                이미지 분석 모델 ID · 모델이 종료되면 사용 가능한 Flash 모델로 자동 재시도
+                auto: 이 API 키에서 사용 가능한 최신 정식 Flash 모델을 자동 선택합니다. 없으면 Flash 미리보기 모델을 사용합니다.
               </span>
+              <datalist id="gemini-model-list">
+                <option value="auto">자동 선택 (권장)</option>
+                {models.map(m => <option key={m.id} value={m.id}>{m.displayName}</option>)}
+              </datalist>
+              <button type="button" className="button" disabled={checkingModels} onClick={async () => {
+                setCheckingModels(true);
+                try {
+                  const data = await api("/api/gemini/models", {
+                    ...(secrets.geminiKey !== undefined ? { key: secrets.geminiKey } : {}),
+                  });
+                  setModels(data.models);
+                  if (data.recommended) {
+                    set("geminiModel", "auto");
+                    notify(`연결 확인 · 추천 모델: ${data.recommended}. 설정 저장 후 적용됩니다.`);
+                  } else notify("사용 가능한 Flash 모델이 없습니다. 모델 권한을 확인해주세요.", true);
+                } catch (err) { notify(err.message, true); }
+                finally { setCheckingModels(false); }
+              }}>{checkingModels ? "모델 확인 중…" : "API 연결 확인 · 모델 조회"}</button>
             </label>
             {keyField(
               "openaiKey",
