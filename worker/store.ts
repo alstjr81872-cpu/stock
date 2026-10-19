@@ -20,7 +20,7 @@ export class Store {
   constructor(
     public env: Env,
     public uid: string,
-    private transport: typeof fetch = fetch,
+    private transport: typeof fetch = (input, init) => fetch(input, init),
   ) {}
   async request(path: string, init: RequestInit = {}) {
     const res = await this.transport(this.env.SUPABASE_URL + path, {

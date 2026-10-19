@@ -2,6 +2,13 @@
 
 현재는 v3.1 **1차 MVP 구현과 실제 Firebase Emulator를 이용한 로컬 검증** 단계입니다. 로컬 개발 환경은 준비됐으며 실제 Firebase/Google 계정과 OpenRouter 서비스 연결·품질 검수가 남아 있습니다. 운영 배포나 전체 명세 완료를 의미하지 않습니다.
 
+## Cloudflare 로그인 후 조회 오류 수정 (2026-10-19)
+
+- Workers 네이티브 fetch를 Store 객체의 메서드처럼 호출하면서 `Illegal invocation`이 발생하는 문제를 workerd에서 재현했습니다. 기본 전송 함수를 화살표 래퍼로 바꿔 호출 대상을 보존했습니다.
+- 실제 workerd 엔진에서 인증 후 `/api/me`, `/api/projects`, `/api/styles`를 실행하는 회귀 테스트를 추가했습니다. 인증/Supabase 응답은 테스트 어댑터이며 실제 배포 계정의 연결 검증과 구분합니다.
+- 서버/SQL/파서/런타임 테스트 14개, 타입 검사, Worker dry run 통과. 공개 사이트 직접 요청은 개발 환경의 목적지 정책에 차단되어 공개 배포 후 사용자 세션 확인이 남아 있습니다.
+- `keep_vars: true`로 Cloudflare 대시보드의 ALLOWED_EMAILS 등 일반 변수를 재배포 시 보존합니다. Secret 값은 코드에 넣지 않습니다.
+
 ## Cloudflare / Supabase 이전 (2026-10-19)
 
 - 정적 Next 화면과 Cloudflare Worker API, Supabase PKCE Google 로그인 및 서버 세션 검증을 추가했습니다. 기존 Firebase Emulator 개발 경로는 보존했습니다.
