@@ -22,7 +22,7 @@ test("OpenRouter payment, key, route and rate errors retain actionable classific
 test("model truncation, malformed JSON and schema failures identify different causes", () => {
   assert.throws(
     () => modelResult(response("{", "length"), "Analysis"),
-    (e: any) => e.status === 422 && e.message.includes("토큰 한도"),
+    (e: any) => e.status === 422 && e.message.includes("출력이 잘렸"),
   );
   assert.throws(
     () => modelResult(response("not JSON"), "Analysis"),

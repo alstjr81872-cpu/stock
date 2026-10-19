@@ -505,6 +505,17 @@ test("complete planning and writing workflow keeps approvals and rewrite history
       }),
       s,
     );
+    assert(
+      (await s.list("jobs")).some(
+        (j) =>
+          j.task === "section" &&
+          j.tokenPlan?.mode === "auto" &&
+          j.tokenPlan.maxOutputTokens > 3000,
+      ),
+    );
+    const me: any = await handleApi(req("/me"), s);
+    assert.equal(me.settings.outputTokenMode, "auto");
+    assert.equal(me.settings.maxOutputTokens, undefined);
     assert.equal(ch.status, "APPROVED");
     assert.equal(ch.approvedTextHash, ch.contentHash);
     const records = await s.list(`projects/${p.id}/approval_records`);

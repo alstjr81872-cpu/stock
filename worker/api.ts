@@ -171,7 +171,11 @@ export async function handleApi(request: Request, s: Store): Promise<unknown> {
     const u = (await s.find("account")) ?? {};
     return {
       uid: s.uid,
-      settings: u.settings ?? defaults(),
+      settings: {
+        models: u.settings?.models ?? defaults().models,
+        monthlyBudgetUsd: u.settings?.monthlyBudgetUsd ?? 5,
+        outputTokenMode: "auto",
+      },
       spend: u.spend ?? {},
       mode: "supabase",
       aiMode: "live",
@@ -193,9 +197,20 @@ export async function handleApi(request: Request, s: Store): Promise<unknown> {
       422,
     );
     const u = await s.find("account");
-    const op = s.prepare("account", { ...u, settings: body }, u?.revision ?? 0);
+    const op = s.prepare(
+      "account",
+      {
+        ...u,
+        settings: {
+          models: body.models,
+          monthlyBudgetUsd: body.monthlyBudgetUsd,
+          outputTokenMode: "auto",
+        },
+      },
+      u?.revision ?? 0,
+    );
     await s.commit([op]);
-    return body;
+    return op.data!.settings;
   }
   if (path === "/models" && method === "GET") return catalog();
   if (path === "/embedding-models" && method === "GET") return catalog(true);

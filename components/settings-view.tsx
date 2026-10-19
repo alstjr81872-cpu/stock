@@ -18,7 +18,7 @@ export default function SettingsView({ me }: { me: any }) {
       me?.settings || {
         models: {},
         monthlyBudgetUsd: 5,
-        maxOutputTokens: 3000,
+        outputTokenMode: "auto",
       },
     ),
     [usage, setUsage] = useState<any[]>([]),
@@ -83,7 +83,14 @@ export default function SettingsView({ me }: { me: any }) {
           onSubmit={(e) => {
             e.preventDefault();
             run(async () => {
-              await send("/settings", config, "PUT");
+              await send(
+                "/settings",
+                {
+                  models: config.models,
+                  monthlyBudgetUsd: config.monthlyBudgetUsd,
+                },
+                "PUT",
+              );
               await refresh();
               notify("역할별 모델과 비용 한도를 저장했습니다.");
             });
@@ -164,22 +171,13 @@ export default function SettingsView({ me }: { me: any }) {
                 }
               />
             </label>
-            <label>
-              요청당 최대 출력 토큰
-              <input
-                type="number"
-                min="512"
-                max="10000"
-                step="1"
-                value={config.maxOutputTokens}
-                onChange={(e) =>
-                  setConfig({
-                    ...config,
-                    maxOutputTokens: Number(e.target.value),
-                  })
-                }
-              />
-            </label>
+            <div>
+              <p>응답 길이 자동 조절</p>
+              <p className="muted">
+                작업과 모델에 맞춰 필요한 응답 공간을 자동으로 확보합니다. 기존
+                토큰 설정은 적용하지 않습니다.
+              </p>
+            </div>
           </div>
           <p className="muted">
             최대 분당 12회 · 하루 200회. 응답 전 보수적 최대 모델 비용을
@@ -204,7 +202,9 @@ export default function SettingsView({ me }: { me: any }) {
               <dd>
                 {me.mode === "emulator"
                   ? "로컬 Firebase Emulator"
-                  : me.mode === "supabase" ? "Supabase 데이터베이스 + Storage" : "Cloud Firestore + Cloud Storage"}
+                  : me.mode === "supabase"
+                    ? "Supabase 데이터베이스 + Storage"
+                    : "Cloud Firestore + Cloud Storage"}
               </dd>
               <dt>브라우저 원고 캐시</dt>
               <dd>영구 로컬 캐시 없음</dd>
@@ -221,12 +221,12 @@ export default function SettingsView({ me }: { me: any }) {
             <Badge tone="amber">무료 플랜 기준 · 사용량 확인 필요</Badge>
             <p className="muted">
               이 화면의 $ 금액은 OpenRouter 요청 비용입니다. 배포는 Cloudflare와
-              Supabase 무료 플랜을 기준으로 합니다. 실제 플랜 상태와 사용량은
-              각 서비스 대시보드에서 확인하세요.
+              Supabase 무료 플랜을 기준으로 합니다. 실제 플랜 상태와 사용량은 각
+              서비스 대시보드에서 확인하세요.
             </p>
             <p className="muted">
-              유료 플랜으로 업그레이드하지 마세요. 무료 한도에 도달하면
-              서비스 이용이 제한될 수 있습니다.
+              유료 플랜으로 업그레이드하지 마세요. 무료 한도에 도달하면 서비스
+              이용이 제한될 수 있습니다.
             </p>
           </div>
           <div className="panel">

@@ -2,6 +2,7 @@ import { Store } from "./store";
 import { type Doc, now, id, bytes, requireThat, HttpError } from "./shared";
 import { modelResult, upstreamError } from "./model-response";
 import assets from "./assets.json";
+import { tokenPlan, efficientInput, compactSchema } from "./token-plan";
 export const ROLES = [
   "questions",
   "planning",
@@ -48,7 +49,7 @@ let cached: { time: number; value: Doc } | null = null;
 export const defaults = () => ({
   models: Object.fromEntries(ROLES.map((r) => [r, ""])),
   monthlyBudgetUsd: 5,
-  maxOutputTokens: 3000,
+  outputTokenMode: "auto",
 });
 export async function catalog(embeddings = false) {
   if (!embeddings && cached && Date.now() - cached.time < 300000)
@@ -75,6 +76,8 @@ export async function catalog(embeddings = false) {
           "pricing",
           "supported_parameters",
           "architecture",
+          "top_provider",
+          "per_request_limits",
         ].map((k) => [k, m[k]]),
       ),
     ),
@@ -120,32 +123,27 @@ export async function generate(
   if (schemas[task])
     system +=
       "\n이 JSON Schema를 만족하는 JSON 객체만 출력하라:\n" +
-      JSON.stringify((assets.schemas as Doc)[schemas[task]]);
+      JSON.stringify(compactSchema((assets.schemas as Doc)[schemas[task]]));
   else system += "\n이번 장면의 순수 한국어 원고만 출력하라.";
-  const payload = JSON.stringify(input),
+  system +=
+    "\n지정된 구조를 완성하고 답만 출력하라. 메타 해설·반복·중복 요약을 생략하되 사용자 요구, 근거, 인과와 필수 항목은 빠뜨리지 마라. 스키마 필드명은 앞선 예시보다 우선한다.";
+  const payload = JSON.stringify(efficientInput(task, input)),
     inputBound = bytes(system + payload).length + 256;
-  const maxOut = config.maxOutputTokens;
-  requireThat(
-    inputBound + maxOut < model.context_length * 0.78,
-    "모델 문맥 한도의 78%를 넘습니다. 자료 범위를 줄이세요.",
-    413,
+  const currentMonth = now().slice(0, 7);
+  const remainingMonthly = Math.max(
+    0,
+    config.monthlyBudgetUsd -
+      (user.spend?.month === currentMonth ? user.spend.reservedUsd : 0),
   );
-  const promptPrice = Number(model.pricing?.prompt),
-    completionPrice = Number(model.pricing?.completion);
-  requireThat(
-    Number.isFinite(promptPrice) &&
-      Number.isFinite(completionPrice) &&
-      promptPrice >= 0 &&
-      completionPrice >= 0,
-    "모델 가격을 확인할 수 없습니다.",
-    422,
+  const plan = tokenPlan(
+    task,
+    input,
+    model,
+    inputBound,
+    Math.min(body.maxCostUsd, remainingMonthly),
   );
-  const estimate = inputBound * promptPrice + maxOut * completionPrice;
-  requireThat(
-    estimate <= body.maxCostUsd,
-    "보수적 최대 요청 비용이 선택한 한도를 넘습니다.",
-    402,
-  );
+  const maxOut = plan.maxOutputTokens,
+    estimate = plan.estimatedMaxUsd;
   const stamp = now(),
     month = stamp.slice(0, 7),
     day = stamp.slice(0, 10),
@@ -181,6 +179,7 @@ export async function generate(
     model: model.id,
     aiMode: "live",
     estimatedMaxUsd: estimate,
+    tokenPlan: { mode: plan.mode, maxOutputTokens: maxOut, inputBound },
     createdAt: stamp,
   });
   const entry = s.prepare(usagePath, {
@@ -220,6 +219,7 @@ export async function generate(
         ],
         max_tokens: maxOut,
         stream: false,
+        ...(plan.reasoning ? { reasoning: plan.reasoning } : {}),
         provider: { data_collection: "deny" },
         ...(schemas[task] &&
         (model.supported_parameters ?? []).includes("response_format")

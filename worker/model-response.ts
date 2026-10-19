@@ -17,13 +17,13 @@ export function upstreamError(
   requestId: string,
 ): HttpError {
   const messages: Record<number, string> = {
-    400: "모델이 요청 형식이나 토큰 설정을 지원하지 않습니다. 해당 역할의 모델과 최대 출력 토큰을 확인하세요.",
+    400: "모델이 요청 형식이나 토큰 설정을 지원하지 않습니다. 해당 역할의 모델 지원 범위를 확인하세요.",
     401: "OpenRouter API 키 인증에 실패했습니다. Cloudflare의 OPENROUTER_API_KEY 설정을 확인하세요.",
-    402: "OpenRouter 잔액 또는 API 키 사용 한도가 부족합니다. Credits 잔액·키 한도를 확인하고 필요하면 최대 출력 토큰을 낮추세요.",
+    402: "OpenRouter 잔액 또는 API 키 사용 한도가 부족합니다. Credits 잔액·키 한도를 확인하고 필요하면 더 저렴한 모델을 선택하세요.",
     403: "선택한 모델 또는 제공자가 이 요청을 허용하지 않았습니다. OpenRouter의 모델 이용 조건과 정책을 확인하세요.",
     404: "선택한 모델의 제공 경로를 찾을 수 없습니다. 해당 역할의 모델을 다시 선택하세요.",
     408: "모델 제공자의 응답 시간이 초과됐습니다. 작업 기록을 확인하세요.",
-    422: "선택한 모델이 요청 설정을 처리하지 못했습니다. 해당 역할의 모델과 토큰 설정을 확인하세요.",
+    422: "선택한 모델이 요청 설정을 처리하지 못했습니다. 해당 역할의 모델 지원 범위를 확인하세요.",
     429: "OpenRouter 또는 모델 제공자의 요청 한도에 도달했습니다. 잠시 후 작업 기록을 확인하세요.",
     502: "OpenRouter 또는 모델 제공자에서 오류가 발생했습니다. 작업 기록과 제공자 상태를 확인하세요.",
     503: "선택한 모델의 제공자가 현재 응답할 수 없습니다. 모델 가용성을 확인하세요.",
@@ -51,7 +51,7 @@ export function modelResult(data: Doc, schema: string | undefined): any {
   if (reason === "length")
     throw new HttpError(
       422,
-      "모델 응답이 출력 토큰 한도에서 잘렸습니다. 최대 출력 토큰을 늘리거나 입력 범위를 줄이세요.",
+      "자동으로 확보한 응답 공간에서도 모델 출력이 잘렸습니다. 모델의 출력 한도 또는 추론 소모량 때문일 수 있습니다. 더 긴 출력을 지원하는 모델이나 더 작은 입력 범위를 선택하세요.",
     );
   if (reason === "content_filter" || choice?.message?.refusal)
     throw new HttpError(
@@ -67,7 +67,7 @@ export function modelResult(data: Doc, schema: string | undefined): any {
   if (typeof raw !== "string" || !raw.trim())
     throw new HttpError(
       422,
-      "모델의 텍스트 응답이 비어 있습니다. 응답 가능한 모델과 토큰 설정을 확인하세요.",
+      "모델의 텍스트 응답이 비어 있습니다. 해당 역할에 텍스트 출력을 지원하는 모델을 선택하세요.",
     );
   if (!schema) {
     if (raw.trim().length < 20)
