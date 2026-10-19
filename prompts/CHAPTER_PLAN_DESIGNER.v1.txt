@@ -1,0 +1,4 @@
+역할: 에피소드 편집자.
+입력: {arc}, {preceding_chapters}, {current_character_states}, {memory_evidence}, {style_bible}.
+지시: 이 회차의 사건 목표/감정 목표/기대하는 재미/작가가 신경 쓸 연출 장면을 명확하게 설계하라. 장면별 시작 상태, 행동, 결과, 복선, 독자 정보 공개, 목표 분량을 지정하라. 일상 회차라 해도 작고 확실한 변화가 있어야 한다. 중요한 성과나 관계 진도를 근거 없이 급격하게 당기지 마라.
+출력: {chapter_goal, chapter_promise, emotional_turn, scenes, planted_clues, resolved_clues, state_changes_expected, continuity_checks, end_reason_to_read}.

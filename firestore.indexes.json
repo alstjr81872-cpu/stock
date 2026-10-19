@@ -1,0 +1,115 @@
+{
+  "indexes": [],
+  "fieldOverrides": [
+    {
+      "collectionGroup": "chapters",
+      "fieldPath": "content",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "scenes",
+      "fieldPath": "content",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "bible_sections",
+      "fieldPath": "content",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "briefs",
+      "fieldPath": "text",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "sources",
+      "fieldPath": "text",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "chunks",
+      "fieldPath": "text",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "prompt_builds",
+      "fieldPath": "layers",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "projects",
+      "fieldPath": "bible",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "projects",
+      "fieldPath": "brief.text",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "projects",
+      "fieldPath": "requirements",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "projects",
+      "fieldPath": "answers",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "projects",
+      "fieldPath": "analysis",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "projects",
+      "fieldPath": "bibleAudit",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "projects",
+      "fieldPath": "styleBinding.snapshot",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "style_profiles",
+      "fieldPath": "sources",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "style_profiles",
+      "fieldPath": "analysis",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "style_profiles",
+      "fieldPath": "notes",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "style_profiles",
+      "fieldPath": "rules",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "jobs",
+      "fieldPath": "result",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "revision_runs",
+      "fieldPath": "original",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "revision_runs",
+      "fieldPath": "replacement",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "reviews",
+      "fieldPath": "findings",
+      "indexes": []
+    }
+  ]
+}

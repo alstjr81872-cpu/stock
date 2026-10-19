@@ -1,0 +1,17 @@
+# Fill in your project-specific public values before deployment. Never put secrets here.
+runConfig:
+  minInstances: 0
+  maxInstances: 2
+  concurrency: 40
+  cpu: 1
+  memoryMiB: 1024
+env:
+  - variable: BACKEND_URL
+    value: https://REPLACE_WITH_YOUR_CLOUD_RUN_SERVICE.run.app
+    availability: [BUILD, RUNTIME]
+  - variable: NEXT_PUBLIC_USE_EMULATORS
+    value: "0"
+    availability: [BUILD, RUNTIME]
+# Configure NEXT_PUBLIC_FIREBASE_API_KEY, AUTH_DOMAIN, PROJECT_ID, STORAGE_BUCKET,
+# APP_ID and optional FIREBASE_AUTH_HELPER_ORIGIN in App Hosting settings.
+# OPENROUTER_API_KEY belongs exclusively on the FastAPI service, via Secret Manager.

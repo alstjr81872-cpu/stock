@@ -1,0 +1,25 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function own(uid) { return request.auth != null && request.auth.uid == uid; }
+    // All authoritative writes go through FastAPI: approval, revisions, budgets and canon
+    // cannot be bypassed by a signed-in browser. No recursive writable wildcard.
+    match /users/{uid} {
+      allow read: if own(uid);
+      allow write: if false;
+      match /projects/{projectId} {
+        allow read: if own(uid);
+        allow write: if false;
+        match /{collection}/{docId} { allow read: if own(uid); allow write: if false; }
+      }
+      match /style_profiles/{styleId} {
+        allow read: if own(uid);
+        allow write: if false;
+        match /{collection}/{docId} { allow read: if own(uid); allow write: if false; }
+      }
+      match /jobs/{job} { allow read: if own(uid); allow write: if false; }
+      match /usage/{usage} { allow read: if own(uid); allow write: if false; }
+    }
+    match /{document=**} { allow read, write: if false; }
+  }
+}
