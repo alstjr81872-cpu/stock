@@ -1,4 +1,5 @@
 import { Store, type Operation } from "./store";
+import { proposePlanning, applyPlanning } from "./planning";
 import {
   type Doc,
   HttpError,
@@ -101,6 +102,8 @@ async function compile(s: Store, p: Doc, sceneId: string) {
       L3: {
         requirements: p.requirements,
         bible: p.bible,
+        planning_decisions: p.planningDecisions ?? [],
+        character_names: p.characterNames ?? [],
         canonVersion: p.canonVersion,
       },
       L4: scene,
@@ -544,6 +547,8 @@ export async function handleApi(request: Request, s: Store): Promise<unknown> {
         "reviews",
         "prompt_builds",
         "revision_runs",
+        "planning_proposals",
+        "planning_history",
       ])
         subcollections[name] = await s.list(`${pp}/${name}`);
       files["project.json"] = bytes(
@@ -628,6 +633,15 @@ export async function handleApi(request: Request, s: Store): Promise<unknown> {
         }),
       );
     }
+    if (action === "planning/apply" && method === "POST")
+      return applyPlanning(s, p, body);
+    if (
+      parts[2] === "sections" &&
+      parts.length === 5 &&
+      parts[4] === "auto-plan" &&
+      method === "POST"
+    )
+      return proposePlanning(s, p, parts[3], body);
     if (parts[2] === "sections" && parts.length >= 4) {
       const key = parts[3];
       check(key in modules, "기획 모듈이 없습니다.", 404);
@@ -675,6 +689,9 @@ export async function handleApi(request: Request, s: Store): Promise<unknown> {
           {
             section: key,
             sectionTitle: modules[key],
+            existing_section: p.bible[key] ?? null,
+            planning_decisions: p.planningDecisions ?? [],
+            character_names: p.characterNames ?? [],
             requirements: p.requirements,
             answers: p.answers,
             other_section_summaries: Object.fromEntries(
@@ -734,6 +751,8 @@ export async function handleApi(request: Request, s: Store): Promise<unknown> {
         {
           requirements: p.requirements,
           answers: p.answers,
+          planning_decisions: p.planningDecisions ?? [],
+          character_names: p.characterNames ?? [],
           bible: p.bible,
           style: p.styleBinding,
         },
@@ -846,6 +865,8 @@ export async function handleApi(request: Request, s: Store): Promise<unknown> {
         "plot",
         {
           approved_bible: p.bible,
+          planning_decisions: p.planningDecisions ?? [],
+          character_names: p.characterNames ?? [],
           approved_style: p.styleBinding.snapshot,
           requirements: p.requirements,
           answers: p.answers,
@@ -1061,6 +1082,8 @@ export async function handleApi(request: Request, s: Store): Promise<unknown> {
         {
           content: ch.content,
           approved_bible: p.bible,
+          planning_decisions: p.planningDecisions ?? [],
+          character_names: p.characterNames ?? [],
           style_bible: p.styleBinding.snapshot,
           scene_plan: p.plot,
         },

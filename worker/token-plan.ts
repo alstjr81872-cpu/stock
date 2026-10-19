@@ -48,6 +48,7 @@ export function tokenPlan(
     style: [8192, 16384],
     plot: [6144, 12288],
     bible_audit: [4096, 8192],
+    auto_plan: [8192, 24576],
     review: [4096, 8192],
     write: [2048, Math.max(8192, chars * 3)],
     rewrite: [1024, Math.max(4096, chars * 3)],

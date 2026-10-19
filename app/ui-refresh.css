@@ -1524,3 +1524,57 @@ pre {
     background: #a78aca1c;
   }
 }
+
+.auto-plan-toolbar,
+.auto-plan-field-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+.auto-plan-toolbar {
+  padding: 16px;
+  border: 1px solid var(--border, #343440);
+  border-radius: 14px;
+}
+.auto-plan-toolbar p {
+  margin: 6px 0 0;
+}
+.auto-plan-field-head {
+  margin-bottom: 10px;
+}
+.auto-plan-field-head label {
+  margin: 0;
+}
+.auto-plan-preview > .panel {
+  margin: 14px 0;
+}
+.auto-plan-preview p {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.auto-plan-comparison {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 20px;
+  margin-top: 18px;
+}
+.auto-plan-comparison h4 {
+  margin-bottom: 8px;
+}
+.auto-plan-preview summary {
+  cursor: pointer;
+  font-weight: 700;
+}
+@media (max-width: 640px) {
+  .auto-plan-toolbar {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .auto-plan-comparison {
+    grid-template-columns: 1fr;
+  }
+  .auto-plan-field-head {
+    gap: 8px;
+  }
+}

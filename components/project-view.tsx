@@ -44,7 +44,8 @@ export default function ProjectView({
     [plotConfirm, setPlotConfirm] = useState(false),
     [jsonPlot, setJsonPlot] = useState<string | null>(null),
     [prompt, setPrompt] = useState<any>(null),
-    [analysisEdit, setAnalysisEdit] = useState<string | null>(null);
+    [analysisEdit, setAnalysisEdit] = useState<string | null>(null),
+    [planningProposal, setPlanningProposal] = useState<any>(null);
   async function load() {
     const data = await api("/projects/" + id);
     setP(data);
@@ -407,6 +408,27 @@ export default function ProjectView({
                       key={section + "-" + p.revision}
                       value={p.bible[section]}
                       requirements={p.requirements}
+                      onAutoPlan={async (value, focus) => {
+                        const max = await askAI(
+                          "미정·설정 충돌을 자동 기획하고 인물 이름·배경을 구체화합니다. 현재 편집 내용, 원문 요구, 인터뷰, 기획 모듈과 문체 정보를 전송합니다. 관련 모듈의 수정안도 함께 제안합니다.",
+                        );
+                        if (max === null) return;
+                        const proposal = await send(
+                          "/projects/" +
+                            id +
+                            "/sections/" +
+                            section +
+                            "/auto-plan",
+                          {
+                            revision: p.revision,
+                            section: value,
+                            focus,
+                            consent: true,
+                            maxCostUsd: max,
+                          },
+                        );
+                        setPlanningProposal(proposal);
+                      }}
                       onSave={async (value) => {
                         await action(
                           "/sections/" + section,
@@ -862,6 +884,117 @@ export default function ProjectView({
           </div>
         </Modal>
       )}
+      {planningProposal && (
+        <Modal
+          title="자동 기획 제안"
+          wide
+          onClose={() => setPlanningProposal(null)}
+        >
+          <div className="modal-body auto-plan-preview">
+            <p>{planningProposal.summary}</p>
+            <h3>결정한 내용</h3>
+            {planningProposal.decisions.map((d: any, i: number) => (
+              <div className="panel" key={i}>
+                <strong>{d.issue}</strong>
+                <p>{d.resolution}</p>
+                <small className="muted">
+                  반영:{" "}
+                  {d.affectedSections
+                    .map((k: string) => modules[k])
+                    .join(" · ")}
+                </small>
+              </div>
+            ))}
+            {planningProposal.characterNames.length > 0 && (
+              <>
+                <h3>등장인물 이름 · 배경</h3>
+                {planningProposal.characterNames.map((n: any, i: number) => (
+                  <div className="panel" key={i}>
+                    <strong>
+                      {n.name} · {n.role}
+                    </strong>
+                    <p>{n.background}</p>
+                  </div>
+                ))}
+              </>
+            )}
+            {planningProposal.unresolved.length > 0 && (
+              <div className="warning-box">
+                <strong>남아 있는 결정</strong>
+                {planningProposal.unresolved.map((q: string, i: number) => (
+                  <p key={i}>{q}</p>
+                ))}
+              </div>
+            )}
+            <h3>수정될 모듈</h3>
+            {planningProposal.sections.map((patch: any) => (
+              <details
+                className="panel"
+                key={patch.key}
+                open={patch.key === planningProposal.sectionKey}
+              >
+                <summary>{modules[patch.key]}</summary>
+                <div className="auto-plan-comparison">
+                  <div>
+                    <strong>현재 기획</strong>
+                    <p>
+                      {(patch.key === planningProposal.sectionKey
+                        ? planningProposal.inputSection
+                        : p.bible[patch.key]
+                      )?.content || "아직 작성되지 않은 모듈입니다."}
+                    </p>
+                  </div>
+                  <div>
+                    <strong>자동 기획</strong>
+                    {Object.entries(fieldLabels).map(([k, label]) => (
+                      <div key={k}>
+                        <h4>{label}</h4>
+                        <p>{patch.section[k]}</p>
+                      </div>
+                    ))}
+                    <p>
+                      미정: {patch.section.openQuestions.join(" · ") || "없음"}
+                    </p>
+                    <p>충돌: {patch.section.conflicts.join(" · ") || "없음"}</p>
+                  </div>
+                </div>
+              </details>
+            ))}
+            <p className="muted">
+              적용하면 위 모듈과 인물 이름이 함께 저장됩니다. 원문 요구는
+              보존되며, 변경 전 기획은 이력에 남습니다. 기획 승인과 집필은
+              별도로 진행합니다.
+            </p>
+            <div className="button-row">
+              <Button
+                disabled={busy}
+                onClick={() =>
+                  run(async () => {
+                    await action("/planning/apply", {
+                      revision: p.revision,
+                      proposalId: planningProposal.id,
+                      confirmed: true,
+                    });
+                    setPlanningProposal(null);
+                    notify(
+                      "자동 기획과 인물 이름을 적용했습니다. 연결된 모듈을 검토하고 교차 검토를 다시 실행하세요.",
+                    );
+                  })
+                }
+              >
+                <Check size={16} />이 기획 적용
+              </Button>
+              <Button
+                variant="secondary"
+                disabled={busy}
+                onClick={() => setPlanningProposal(null)}
+              >
+                현재 편집 유지
+              </Button>
+            </div>
+          </div>
+        </Modal>
+      )}
       {prompt && (
         <Modal title="최종 집필 프롬프트" wide onClose={() => setPrompt(null)}>
           <div className="modal-body">
@@ -889,11 +1022,13 @@ function SectionForm({
   requirements,
   onSave,
   onReviewed,
+  onAutoPlan,
 }: {
   value: any;
   requirements: any[];
   onSave: (v: any) => Promise<void>;
   onReviewed: () => Promise<void>;
+  onAutoPlan: (v: any, focus: string) => Promise<void>;
 }) {
   const { busy, run } = useActions();
   const [draft, setDraft] = useState<any>(() =>
@@ -914,6 +1049,22 @@ function SectionForm({
         run(() => onSave(draft));
       }}
     >
+      <div className="auto-plan-toolbar">
+        <div>
+          <strong>기획을 더 구체적으로</strong>
+          <p className="muted">
+            이름·배경·미정·충돌을 연결해 해결안을 만듭니다.
+          </p>
+        </div>
+        <Button
+          type="button"
+          variant="secondary"
+          disabled={busy}
+          onClick={() => run(() => onAutoPlan(draft, "all"))}
+        >
+          <Sparkles size={15} />이 모듈 자동 기획
+        </Button>
+      </div>
       {value.needsReview && (
         <div className="warning-box">
           <p>다른 설정이 변경되었습니다. 연결과 인과를 다시 검토하세요.</p>
@@ -969,9 +1120,23 @@ function SectionForm({
         ["openQuestions", "미정 · 사용자 선택 필요"],
         ["conflicts", "설정 충돌"],
       ].map(([k, label]) => (
-        <label key={k}>
-          {label}
+        <div key={k} className="auto-plan-field">
+          <div className="auto-plan-field-head">
+            <label htmlFor={"planning-" + k}>{label}</label>
+            <Button
+              type="button"
+              size="sm"
+              variant="secondary"
+              disabled={busy}
+              aria-label={label + " 자동 기획"}
+              onClick={() => run(() => onAutoPlan(draft, k))}
+            >
+              <Sparkles size={14} />
+              자동 기획
+            </Button>
+          </div>
           <textarea
+            id={"planning-" + k}
             rows={2}
             value={draft[k].join("\n")}
             placeholder="해결되지 않은 항목은 줄바꿈으로 기록합니다. 남아 있으면 승인이 차단됩니다."
@@ -982,7 +1147,7 @@ function SectionForm({
               })
             }
           />
-        </label>
+        </div>
       ))}
       <div className="button-row">
         <Button type="submit" disabled={busy}>

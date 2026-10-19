@@ -237,3 +237,37 @@ class BibleAudit(Strict):
 class ResolveFinding(Confirm):
     findingId: str
     resolution: str = Field(min_length=10, max_length=2000)
+
+
+class AutoPlanRequest(AIRequest):
+    section: BibleSection
+    focus: Literal['all', 'openQuestions', 'conflicts'] = 'all'
+
+
+class PlanningDecision(Strict):
+    issue: str = Field(min_length=1)
+    resolution: str = Field(min_length=10)
+    affectedSections: list[str] = Field(min_length=1)
+
+
+class CharacterNamePlan(Strict):
+    role: str = Field(min_length=1)
+    name: str = Field(min_length=1)
+    background: str = Field(min_length=10)
+
+
+class PlannedSection(Strict):
+    key: str
+    section: BibleSection
+
+
+class PlanningProposal(Strict):
+    summary: str = Field(min_length=10)
+    decisions: list[PlanningDecision] = Field(min_length=1, max_length=50)
+    characterNames: list[CharacterNamePlan] = Field(default_factory=list, max_length=30)
+    sections: list[PlannedSection] = Field(min_length=1, max_length=11)
+    unresolved: list[str] = Field(default_factory=list)
+
+
+class ApplyPlanning(Confirm):
+    proposalId: str

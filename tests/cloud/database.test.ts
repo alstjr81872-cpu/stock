@@ -613,3 +613,153 @@ test("OpenRouter 402 remains a payment error and is saved without upstream secre
     globalThis.fetch = originalFetch;
   }
 });
+
+test("automatic planning previews then atomically applies names, related sections and history", async () => {
+  const s = store(),
+    originalFetch = globalThis.fetch,
+    pid = "autoplan";
+  const originalSection = {
+    ...structuredClone(fixtures.section),
+    requirementIds: ["R001"],
+    openQuestions: ["주인공의 본명은?"],
+    conflicts: [],
+  };
+  const p = await s.create("projects/" + pid, {
+    title: "자동 기획 작품",
+    brief: { text: "원문 요구를 보존한다." },
+    requirements: [{ id: "R001", text: "원문 요구를 보존한다." }],
+    answers: {},
+    bible: {
+      concept: originalSection,
+      world: { ...originalSection, openQuestions: [] },
+    },
+    status: "ACTIVE",
+    canonVersion: 1,
+    plot: { status: "APPROVED" },
+    bibleAudit: { inputHash: "old" },
+  });
+  const draft = {
+    ...originalSection,
+    content: originalSection.content + " 저장 전 편집도 유지합니다.",
+  };
+  const revised = {
+    ...draft,
+    content:
+      draft.content + " 주인공의 본명은 서도윤이며 도시 기록관 출신이다.",
+    openQuestions: [],
+  };
+  const result = {
+    summary: "미정 이름과 배경을 결정하고 인물 모듈에 연결했습니다.",
+    decisions: [
+      {
+        issue: "주인공의 본명은?",
+        resolution:
+          "서도윤이라는 이름과 도시 기록관 출신 배경을 기획에 반영합니다.",
+        affectedSections: ["concept", "characters"],
+      },
+    ],
+    characterNames: [
+      {
+        role: "주인공",
+        name: "서도윤",
+        background: "빙의 전 도시 기록관에서 시민들의 기록을 관리했다.",
+      },
+    ],
+    sections: [
+      { key: "concept", section: revised },
+      { key: "characters", section: revised },
+    ],
+    unresolved: [],
+  };
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls++;
+    return Response.json({
+      id: "test-planning",
+      choices: [
+        { finish_reason: "stop", message: { content: JSON.stringify(result) } },
+      ],
+      usage: { cost: 0 },
+    });
+  };
+  try {
+    const u = await s.get("account");
+    await s.change("account", u.revision, (d) => {
+      d.rate = {};
+    });
+    const proposal: any = await handleApi(
+      req(`/projects/${pid}/sections/concept/auto-plan`, {
+        revision: p.revision,
+        section: draft,
+        focus: "openQuestions",
+        consent: true,
+        maxCostUsd: 1,
+      }),
+      s,
+    );
+    assert.equal(calls, 1);
+    assert.deepEqual((await s.get("projects/" + pid)).bible, p.bible);
+    assert.equal(proposal.status, "PROPOSED");
+    assert(proposal.inputSection.content.includes("저장 전 편집"));
+    await assert.rejects(
+      handleApi(
+        req(`/projects/${pid}/planning/apply`, {
+          revision: 1,
+          proposalId: proposal.id,
+          confirmed: false,
+        }),
+        s,
+      ),
+    );
+    const updated: any = await handleApi(
+      req(`/projects/${pid}/planning/apply`, {
+        revision: 1,
+        proposalId: proposal.id,
+        confirmed: true,
+      }),
+      s,
+    );
+    assert.equal(calls, 1);
+    assert.equal(updated.characterNames[0].name, "서도윤");
+    assert(updated.bible.characters.content.includes("서도윤"));
+    assert(updated.bible.concept.content.includes("저장 전 편집"));
+    assert.equal(updated.bible.world.needsReview, true);
+    assert.equal(updated.status, "BIBLE_REVIEW");
+    assert.equal(updated.plot.status, "INVALIDATED");
+    assert.equal(updated.bibleAudit, null);
+    assert.deepEqual(updated.requirements, p.requirements);
+    assert.equal(updated.brief.text, p.brief.text);
+    const history = await s.list(`projects/${pid}/planning_history`);
+    assert.equal(history.length, 1);
+    assert.deepEqual(history[0].beforeBible, p.bible);
+    await assert.rejects(
+      handleApi(
+        req(`/projects/${pid}/planning/apply`, {
+          revision: updated.revision,
+          proposalId: proposal.id,
+          confirmed: true,
+        }),
+        s,
+      ),
+    );
+    const stale = await s.create(`projects/${pid}/planning_proposals/stale`, {
+      ...proposal,
+      id: "stale",
+      status: "PROPOSED",
+      inputRevision: 1,
+    });
+    await assert.rejects(
+      handleApi(
+        req(`/projects/${pid}/planning/apply`, {
+          revision: updated.revision,
+          proposalId: stale.id,
+          confirmed: true,
+        }),
+        s,
+      ),
+      (e: any) => e.status === 409,
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

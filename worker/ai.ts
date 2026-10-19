@@ -15,6 +15,7 @@ export const ROLES = [
 ];
 const schemas: Record<string, string> = {
   bible_audit: "BibleAudit",
+  auto_plan: "PlanningProposal",
   style_interview: "Analysis",
   analysis: "Analysis",
   section: "BibleSection",
@@ -25,6 +26,7 @@ const schemas: Record<string, string> = {
 };
 const templates: Record<string, string> = {
   bible_audit: "BIBLE_CROSS_REVIEW",
+  auto_plan: "AUTO_PLANNER",
   style_interview: "STYLE_INTERVIEW",
   analysis: "PROFILE_INTERVIEW_GENERATOR",
   section: "STORY_BIBLE_DESIGNER",
@@ -36,6 +38,7 @@ const templates: Record<string, string> = {
 };
 const roles: Record<string, string> = {
   bible_audit: "review",
+  auto_plan: "planning",
   style_interview: "style",
   analysis: "questions",
   section: "planning",

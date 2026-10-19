@@ -2,6 +2,7 @@ import { type Doc, HttpError } from "./shared";
 import { validate } from "./validation";
 const taskNames: Record<string, string> = {
   analysis: "원문 분석",
+  auto_plan: "자동 기획",
   section: "모듈 생성",
   style: "문체 분석",
   style_interview: "문체 인터뷰",

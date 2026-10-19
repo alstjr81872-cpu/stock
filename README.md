@@ -4,6 +4,8 @@
 
 **현재 범위는 1차 MVP 구현과 실제 Firebase Emulator 검증입니다. v3.1 전체나 운영 배포가 완료된 상태가 아닙니다.** 실제 테스트 결과와 미구현 항목은 [구현·검증 현황](docs/status.md)에 구분했습니다. 개발용 AI 응답은 실제 생성 품질 검증이 아닙니다.
 
+기획서의 미정·설정 충돌 옆 **자동 기획**으로 이름·배경·인과 해결안과 관련 모듈 수정을 제안받을 수 있습니다. 미리보기에서 적용하면 원문을 보존하고 변경 이력을 남깁니다.
+
 ## 무료 배포 경로
 
 **Cloudflare Workers Free + Supabase Free**용 서버와 정적 빌드를 추가했습니다. [단계별 배포 안내](docs/cloud-deployment.md)를 따르세요. `npm run build:cloud` → `npm run check:cloud`로 배포 파일을 검증합니다. 실제 프로젝트 SQL 적용·서버 Secret 입력·공개 배포·실제 Google 로그인은 아직 남아 있습니다. 아래 Firebase 설명은 보존된 로컬 개발 경로입니다.

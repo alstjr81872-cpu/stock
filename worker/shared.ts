@@ -83,6 +83,8 @@ export async function bibleHash(p: Doc) {
       requirements: p.requirements.map(({ approved, ...q }: Doc) => q),
       answers: p.answers,
       style: p.styleBinding,
+      planningDecisions: p.planningDecisions ?? [],
+      characterNames: p.characterNames ?? [],
     }),
   );
 }
