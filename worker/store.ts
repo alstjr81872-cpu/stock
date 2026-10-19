@@ -21,6 +21,7 @@ export class Store {
     public env: Env,
     public uid: string,
     private transport: typeof fetch = (input, init) => fetch(input, init),
+    public preflight = false,
   ) {}
   async request(path: string, init: RequestInit = {}) {
     const res = await this.transport(this.env.SUPABASE_URL + path, {

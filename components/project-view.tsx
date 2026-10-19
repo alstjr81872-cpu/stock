@@ -61,7 +61,10 @@ export default function ProjectView({
     return result;
   }
   async function generate(path: string, scope: string) {
-    const max = await askAI(scope);
+    const max = await askAI(scope, {
+      path: "/projects/" + id + path,
+      data: { revision: p.revision },
+    });
     if (max === null) return;
     await action(path, {
       revision: p.revision,
@@ -411,6 +414,19 @@ export default function ProjectView({
                       onAutoPlan={async (value, focus) => {
                         const max = await askAI(
                           "미정·설정 충돌을 자동 기획하고 인물 이름·배경을 구체화합니다. 현재 편집 내용, 원문 요구, 인터뷰, 기획 모듈과 문체 정보를 전송합니다. 관련 모듈의 수정안도 함께 제안합니다.",
+                          {
+                            path:
+                              "/projects/" +
+                              id +
+                              "/sections/" +
+                              section +
+                              "/auto-plan",
+                            data: {
+                              revision: p.revision,
+                              section: value,
+                              focus,
+                            },
+                          },
                         );
                         if (max === null) return;
                         const proposal = await send(

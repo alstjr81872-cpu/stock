@@ -27,6 +27,19 @@ test("authenticated dashboard reads Supabase through the real Workers fetch runt
       outboundService: async (request) => {
         const url = new URL(request.url);
         requests.push(url.pathname);
+        if (url.hostname === "openrouter.ai") {
+          assert.equal(url.pathname, "/api/v1/models");
+          return Response.json({
+            data: [
+              {
+                id: "test/model",
+                context_length: 200000,
+                pricing: { prompt: "0.000001", completion: "0.000002" },
+                supported_parameters: [],
+              },
+            ],
+          });
+        }
         assert.equal(url.hostname, "runtime.supabase.test");
         assert.equal(request.headers.get("apikey"), "fixture-server-key");
         if (url.pathname === "/auth/v1/user") {
@@ -46,6 +59,33 @@ test("authenticated dashboard reads Supabase through the real Workers fetch runt
           "Bearer fixture-server-key",
         );
         assert.equal(url.pathname, "/rest/v1/nf_documents");
+        if (url.searchParams.get("path") === "eq.account")
+          return Response.json([
+            {
+              data: {
+                ownerUid: "11111111-1111-4111-8111-111111111111",
+                revision: 1,
+                settings: {
+                  models: { questions: "test/model" },
+                  monthlyBudgetUsd: 5,
+                },
+              },
+            },
+          ]);
+        if (url.searchParams.get("path") === "eq.projects/preflight")
+          return Response.json([
+            {
+              data: {
+                id: "preflight",
+                ownerUid: "11111111-1111-4111-8111-111111111111",
+                revision: 1,
+                status: "IDEA",
+                brief: { text: "테스트 기획" },
+                requirements: [],
+                answers: {},
+              },
+            },
+          ]);
         return Response.json([]);
       },
     }),
@@ -65,6 +105,24 @@ test("authenticated dashboard reads Supabase through the real Workers fetch runt
       requests.filter((p) => p === "/rest/v1/nf_documents").length,
       3,
     );
+    const quoted = await mf.dispatchFetch(
+      "https://app.test/api/projects/preflight/analyze",
+      {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer fixture-session",
+          "Content-Type": "application/json",
+          "X-NF-Preflight": "1",
+        },
+        body: JSON.stringify({ revision: 1, consent: false, maxCostUsd: 5 }),
+      },
+    );
+    const quote: any = await quoted.json();
+    assert.equal(quoted.status, 200, JSON.stringify(quote));
+    assert.equal(quote.estimateOnly, true);
+    assert(quote.suggestedMaxCostUsd > 0);
+    assert(!requests.includes("/api/v1/chat/completions"));
+    assert(!requests.some((p) => p.includes("/rpc/")));
     const unauthenticated = await mf.dispatchFetch("https://app.test/api/me");
     assert.equal(unauthenticated.status, 401);
   } finally {

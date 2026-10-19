@@ -45,7 +45,10 @@ import SettingsView from "./settings-view";
 type Context = {
   busy: boolean;
   run: (fn: () => Promise<void>) => Promise<void>;
-  askAI: (scope: string) => Promise<number | null>;
+  askAI: (
+    scope: string,
+    request?: { path: string; data: Record<string, unknown> },
+  ) => Promise<number | null>;
   notify: (s: string) => void;
   refresh: () => Promise<void>;
   canLeave: () => Promise<boolean>;
@@ -129,6 +132,7 @@ export default function Workspace() {
     [mobile, setMobile] = useState(false);
   const [aiDialog, setAiDialog] = useState<{
       scope: string;
+      quote?: any;
       resolve: (v: number | null) => void;
     } | null>(null),
     [cost, setCost] = useState("0.15"),
@@ -165,9 +169,7 @@ export default function Workspace() {
         setInitializing(false);
       }, setError);
     } catch {
-      setError(
-        "로그인 연결 설정이 필요합니다. 배포 안내를 확인하세요.",
-      );
+      setError("로그인 연결 설정이 필요합니다. 배포 안내를 확인하세요.");
       setInitializing(false);
     }
     return () => {
@@ -223,11 +225,28 @@ export default function Workspace() {
       setBusy(false);
     }
   }
-  function askAI(scope: string) {
+  async function askAI(
+    scope: string,
+    request?: { path: string; data: Record<string, unknown> },
+  ) {
     setAgree(false);
-    setCost("0.15");
+    let quote: any;
+    if (me?.mode === "supabase" && request) {
+      quote = await api(request.path, {
+        method: "POST",
+        headers: { "X-NF-Preflight": "1" },
+        body: JSON.stringify({
+          ...request.data,
+          consent: false,
+          maxCostUsd: 5,
+        }),
+      });
+      if (!quote.estimateOnly)
+        throw new Error("작업 비용 사전 계산에 실패했습니다.");
+    }
+    setCost(quote ? String(quote.suggestedMaxCostUsd) : "0.15");
     return new Promise<number | null>((resolve) =>
-      setAiDialog({ scope, resolve }),
+      setAiDialog({ scope, quote, resolve }),
     );
   }
   function aiClose(value: number | null) {
@@ -617,16 +636,25 @@ export default function Workspace() {
               응답이 불명확하면 자동 재요청하지 않습니다.
             </p>
             <label>
-              요청 1회당 최대 비용 (USD)
+              {aiDialog.quote
+                ? "이번 작업 비용 상한 · 자동 계산 (USD)"
+                : "요청 1회당 최대 비용 (USD)"}
               <input
                 type="number"
                 min="0.001"
                 max="5"
-                step="0.01"
+                step="0.000001"
                 value={cost}
                 onChange={(e) => setCost(e.target.value)}
               />
             </label>
+            {aiDialog.quote && (
+              <p className="field-hint">
+                {aiDialog.quote.model} · 남은 앱 월 예산 $
+                {aiDialog.quote.remainingMonthlyUsd.toFixed(4)}. 실제 비용은
+                사용량에 따라 정산하며, 사전 계산에는 유료 생성 요청이 없습니다.
+              </p>
+            )}
             <label className="checkbox">
               <input
                 type="checkbox"

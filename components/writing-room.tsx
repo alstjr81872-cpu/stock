@@ -151,7 +151,10 @@ export default function WritingRoom({
   useEffect(() => registerLeave(flush), []);
   async function aiAction(path: string, scope: string) {
     if (!(await flush())) return;
-    const max = await askAI(scope);
+    const max = await askAI(scope, {
+      path: base + path,
+      data: { revision: chRef.current.revision },
+    });
     if (max === null) return;
     const result = await send(base + path, {
       revision: chRef.current.revision,
@@ -209,6 +212,10 @@ export default function WritingRoom({
               run(async () => {
                 const max = await askAI(
                   "첫 장면의 승인된 플롯·문체·기획과 공통 집필 규칙을 전송해 원고 초안을 생성합니다.",
+                  {
+                    path: base + "/scenes/" + p.plot.scenes[0].id + "/write",
+                    data: { revision: p.revision },
+                  },
                 );
                 if (max === null) return;
                 const data = await send(
@@ -300,6 +307,10 @@ export default function WritingRoom({
                       if (!(await flush())) return;
                       const max = await askAI(
                         `다음 장면 「${next.title}」을 작성합니다. 승인 설정과 직전 장면 원고 일부를 전송합니다.`,
+                        {
+                          path: base + "/scenes/" + next.id + "/write",
+                          data: { revision: p.revision },
+                        },
                       );
                       if (max === null) return;
                       const data = await send(
@@ -624,10 +635,6 @@ export default function WritingRoom({
               onClick={() =>
                 run(async () => {
                   if (!(await flush())) return;
-                  const max = await askAI(
-                    "선택한 원문 구간과 앞뒤 문맥 일부, 승인 문체를 전송해 최소 범위 수정안을 생성합니다.",
-                  );
-                  if (max === null) return;
                   const index = textRef.current.indexOf(passage);
                   if (index < 0)
                     throw new Error(
@@ -636,6 +643,19 @@ export default function WritingRoom({
                   const start = Array.from(
                     textRef.current.slice(0, index),
                   ).length;
+                  const max = await askAI(
+                    "선택한 원문 구간과 앞뒤 문맥 일부, 승인 문체를 전송해 최소 범위 수정안을 생성합니다.",
+                    {
+                      path: base + "/chapter/rewrite",
+                      data: {
+                        revision: chRef.current.revision,
+                        start,
+                        end: start + Array.from(passage).length,
+                        instruction,
+                      },
+                    },
+                  );
+                  if (max === null) return;
                   const result = await send(base + "/chapter/rewrite", {
                     revision: chRef.current.revision,
                     start,

@@ -64,7 +64,10 @@ export default function StyleLibrary({ styles }: { styles: any[] }) {
     setAgree(false);
   }
   async function generate(path: string, scope: string) {
-    const max = await askAI(scope);
+    const max = await askAI(scope, {
+      path: "/styles/" + selected.id + path,
+      data: { revision: selected.revision },
+    });
     if (max === null) return;
     await update(
       await send("/styles/" + selected.id + path, {

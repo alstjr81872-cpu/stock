@@ -42,13 +42,13 @@ export function tokenPlan(
     Math.ceil(bytes(JSON.stringify(input)).length / 16),
   );
   const base: Record<string, [number, number]> = {
-    analysis: [4096, 8192],
-    style_interview: [4096, 8192],
-    section: [6144, 12288],
-    style: [8192, 16384],
-    plot: [6144, 12288],
+    analysis: [2048, 8192],
+    style_interview: [2048, 8192],
+    section: [2048, 12288],
+    style: [4096, 16384],
+    plot: [3072, 12288],
     bible_audit: [4096, 8192],
-    auto_plan: [8192, 24576],
+    auto_plan: [3072, 24576],
     review: [4096, 8192],
     write: [2048, Math.max(8192, chars * 3)],
     rewrite: [1024, Math.max(4096, chars * 3)],
@@ -73,7 +73,7 @@ export function tokenPlan(
   );
   requireThat(
     budgetUsd >= inputCost && affordable >= minimum,
-    "현재 요청 또는 남은 월 예산으로는 이 작업의 응답 공간을 확보할 수 없습니다. 더 저렴한 모델이나 더 높은 비용 한도를 선택하세요.",
+    `이 요청에 필요한 최소 비용은 약 $${(inputCost + minimum * completionPrice).toFixed(4)}이며, 현재 앱 비용 한도는 $${budgetUsd.toFixed(4)}입니다. OpenRouter 잔액과는 별도입니다.`,
     402,
   );
   const maxOutputTokens = Math.floor(Math.min(target, hardLimit, affordable));
@@ -133,6 +133,8 @@ export function efficientInput(task: string, input: Doc): Doc {
     );
   for (const key of ["bible", "approved_bible"])
     if (data[key]) data[key] = slim(data[key]);
+  if (task === "auto_plan" && data.current_section && data.bible)
+    delete data.bible[data.section];
   if (data.layers?.L3?.bible) data.layers.L3.bible = slim(data.layers.L3.bible);
   return data;
 }

@@ -70,7 +70,7 @@ test("automatic output respects model, request budget and context limits", () =>
       tokenPlan(
         "section",
         {},
-        model({ top_provider: { max_completion_tokens: 2048 } }),
+        model({ top_provider: { max_completion_tokens: 512 } }),
         1000,
         1,
       ),
@@ -116,4 +116,21 @@ test("input compression preserves original text, requirement IDs, canon and styl
   assert.equal(packed.bible.world.content, "세계의 규칙");
   assert.equal(packed.bible.world.run, undefined);
   assert.deepEqual(packed.approved_style, original.approved_style);
+});
+
+test("preflight can price an expensive task without the old arbitrary fifteen-cent ceiling", () => {
+  const expensive = model({
+    pricing: { prompt: "0.000015", completion: "0.000075" },
+  });
+  const quote = tokenPlan("auto_plan", {}, expensive, 2000, 5);
+  assert(quote.estimatedMaxUsd > 0.15);
+  assert(quote.estimatedMaxUsd <= 5);
+  const compact = tokenPlan(
+    "section",
+    {},
+    model({ top_provider: { max_completion_tokens: 2048 } }),
+    1000,
+    1,
+  );
+  assert.equal(compact.maxOutputTokens, 2048);
 });

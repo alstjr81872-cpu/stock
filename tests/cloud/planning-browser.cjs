@@ -115,7 +115,9 @@ const fixtures = require("./fixtures.json");
       conflicts: [],
     };
     let submitted,
-      applies = 0;
+      applies = 0,
+      preflights = 0,
+      generations = 0;
     const proposal = {
       id: "proposal-ui",
       inputRevision: 1,
@@ -162,8 +164,21 @@ const fixtures = require("./fixtures.json");
       else if (path === "/api/projects") data = [p];
       else if (path === "/api/styles") data = [];
       else if (path.endsWith("/auto-plan")) {
-        submitted = request.postDataJSON();
-        data = proposal;
+        if (request.headers()["x-nf-preflight"] === "1") {
+          preflights++;
+          data = {
+            estimateOnly: true,
+            model: "test/model",
+            estimatedMaxUsd: 0.32,
+            suggestedMaxCostUsd: 0.32,
+            remainingMonthlyUsd: 5,
+            maxOutputTokens: 16000,
+          };
+        } else {
+          generations++;
+          submitted = request.postDataJSON();
+          data = proposal;
+        }
       } else if (path.endsWith("/planning/apply")) {
         applies++;
         p = {
@@ -202,12 +217,24 @@ const fixtures = require("./fixtures.json");
     await page
       .getByRole("checkbox", { name: "전송 범위와 실행 한도를 확인했습니다." })
       .check();
+    assert.equal(preflights, 1);
+    assert.equal(generations, 0);
+    assert.equal(
+      await page
+        .getByRole("spinbutton", {
+          name: "이번 작업 비용 상한 · 자동 계산 (USD)",
+        })
+        .inputValue(),
+      "0.32",
+    );
     await page
       .getByRole("button", { name: "확인하고 실행", exact: true })
       .click();
     const modal = page.getByRole("dialog", { name: "자동 기획 제안" });
     await modal.waitFor();
     assert.equal(submitted.focus, "openQuestions");
+    assert.equal(submitted.maxCostUsd, 0.32);
+    assert.equal(generations, 1);
     assert(submitted.section.content.includes("저장 전 문장"));
     assert.equal(applies, 0);
     await modal

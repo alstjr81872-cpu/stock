@@ -88,3 +88,9 @@ export async function bibleHash(p: Doc) {
     }),
   );
 }
+
+export class QuoteReady extends Error {
+  constructor(public quote: Doc) {
+    super("AI request estimate");
+  }
+}

@@ -1,5 +1,13 @@
 import { Store } from "./store";
-import { type Doc, now, id, bytes, requireThat, HttpError } from "./shared";
+import {
+  type Doc,
+  now,
+  id,
+  bytes,
+  requireThat,
+  HttpError,
+  QuoteReady,
+} from "./shared";
 import { modelResult, upstreamError } from "./model-response";
 import assets from "./assets.json";
 import { tokenPlan, efficientInput, compactSchema } from "./token-plan";
@@ -98,7 +106,7 @@ export async function generate(
   scope: Doc,
 ) {
   requireThat(
-    body.consent === true,
+    s.preflight || body.consent === true,
     "외부 모델 전송 범위와 요청 한도를 확인하고 실행에 동의해주세요.",
     400,
   );
@@ -138,13 +146,26 @@ export async function generate(
     config.monthlyBudgetUsd -
       (user.spend?.month === currentMonth ? user.spend.reservedUsd : 0),
   );
-  const plan = tokenPlan(
-    task,
-    input,
-    model,
-    inputBound,
-    Math.min(body.maxCostUsd, remainingMonthly),
+  const effectiveBudget = Math.min(body.maxCostUsd, remainingMonthly);
+  requireThat(
+    remainingMonthly > 0,
+    `앱의 월 예산이 소진되었습니다. 설정의 월 예산과 사용 내역을 확인하세요. OpenRouter 잔액과는 별도입니다.`,
+    402,
   );
+  const plan = tokenPlan(task, input, model, inputBound, effectiveBudget);
+  if (s.preflight)
+    throw new QuoteReady({
+      model: model.id,
+      task,
+      estimatedMaxUsd: plan.estimatedMaxUsd,
+      suggestedMaxCostUsd: Math.min(
+        5,
+        remainingMonthly,
+        Math.max(0.001, Math.ceil(plan.estimatedMaxUsd * 1000000) / 1000000),
+      ),
+      remainingMonthlyUsd: remainingMonthly,
+      maxOutputTokens: plan.maxOutputTokens,
+    });
   const maxOut = plan.maxOutputTokens,
     estimate = plan.estimatedMaxUsd;
   const stamp = now(),
@@ -249,13 +270,13 @@ export async function generate(
         requestId,
       );
     }
-    const result = modelResult(data, schemas[task]);
     if (
       typeof data.usage?.cost === "number" &&
       Number.isFinite(data.usage.cost) &&
       data.usage.cost >= 0
     )
       cost = data.usage.cost;
+    const result = modelResult(data, schemas[task]);
     // Save the result before accounting; if accounting conflicts it remains recoverable in jobs.
     await s.change(jobPath, 1, (d) =>
       Object.assign(d, {
@@ -266,29 +287,13 @@ export async function generate(
       }),
     );
     resultSaved = true;
-    await s.change(usagePath, 2, (d) =>
-      Object.assign(d, {
-        status: "COMPLETED",
-        actualUsd: cost,
-        generationId: data.id,
-        tokens: data.usage,
-      }),
-    );
-    if (cost !== null) {
-      const current = await s.get("account");
-      if (current.spend?.month === month) {
-        try {
-          await s.change("account", current.revision, (d) => {
-            d.spend.reservedUsd = Math.max(
-              0,
-              d.spend.reservedUsd - estimate + cost!,
-            );
-          });
-        } catch {
-          /* Keep the full reservation when concurrent accounting conflicts. */
-        }
-      }
-    }
+    await settleUsage(s, requestId, "COMPLETED", cost, {
+      generationId: data.id,
+      tokens: {
+        prompt_tokens: data.usage?.prompt_tokens,
+        completion_tokens: data.usage?.completion_tokens,
+      },
+    });
     return {
       result,
       run: {
@@ -322,14 +327,70 @@ export async function generate(
           }),
         );
       } catch {}
-    // The full reservation is deliberately retained for every ambiguous outcome.
+    // A definitive payment/key rejection has no generation charge. Unknown outcomes retain the reservation.
+    if (
+      cost === null &&
+      [401, 402, 403, 404, 429].some((code) =>
+        failure.message.includes(`(OpenRouter ${code})`),
+      )
+    )
+      cost = 0;
     try {
-      const u = await s.get(usagePath);
-      if (u.status !== "COMPLETED")
-        await s.change(usagePath, u.revision, (d) => {
-          d.status = submitted ? "UNCERTAIN" : "FAILED";
-        });
+      await settleUsage(
+        s,
+        requestId,
+        submitted && cost === null ? "UNCERTAIN" : "FAILED",
+        cost,
+        { errorStatus: failure.status },
+      );
     } catch {}
     throw failure;
+  }
+}
+
+export async function settleUsage(
+  s: Store,
+  requestId: string,
+  status: string,
+  cost: number | null,
+  detail: Doc = {},
+) {
+  const path = "usage/" + requestId;
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const account = await s.get("account"),
+      entry = await s.get(path);
+    if (entry.settled) return;
+    const next = {
+      ...entry,
+      ...detail,
+      status,
+      actualUsd: cost,
+      settled: cost !== null,
+    };
+    const ops = [s.prepare(path, next, entry.revision)];
+    if (cost !== null && account.spend?.month === entry.createdAt.slice(0, 7))
+      ops.push(
+        s.prepare(
+          "account",
+          {
+            ...account,
+            spend: {
+              ...account.spend,
+              reservedUsd: Math.max(
+                0,
+                account.spend.reservedUsd - entry.reservedUsd + cost,
+              ),
+            },
+          },
+          account.revision,
+        ),
+      );
+    try {
+      await s.commit(ops);
+      return;
+    } catch (e) {
+      if (!(e instanceof HttpError) || e.status !== 409 || attempt === 3)
+        throw e;
+    }
   }
 }

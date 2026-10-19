@@ -1,4 +1,4 @@
-import { type Env, HttpError, requireThat } from "./shared";
+import { type Env, HttpError, requireThat, QuoteReady } from "./shared";
 import { Store } from "./store";
 import { handleApi } from "./api";
 const privacy = {
@@ -115,7 +115,15 @@ export default {
         }
         request = new Request(request, { body: raw });
       }
-      const result = await handleApi(request, new Store(env, uid));
+      const result = await handleApi(
+        request,
+        new Store(
+          env,
+          uid,
+          undefined,
+          request.headers.get("X-NF-Preflight") === "1",
+        ),
+      );
       if (result instanceof Response) {
         const h = new Headers(result.headers);
         for (const [k, v] of Object.entries(privacy)) h.set(k, v);
@@ -123,6 +131,11 @@ export default {
       }
       return Response.json(result, { headers: privacy });
     } catch (e) {
+      if (e instanceof QuoteReady)
+        return Response.json(
+          { estimateOnly: true, ...e.quote },
+          { headers: privacy },
+        );
       return Response.json(
         {
           detail:

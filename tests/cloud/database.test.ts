@@ -3,12 +3,12 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { PGlite } from "@electric-sql/pglite";
 import { Store } from "../../worker/store";
-import { HttpError, hash, bytes } from "../../worker/shared";
+import { HttpError, hash, bytes, QuoteReady, now } from "../../worker/shared";
 import { handleApi } from "../../worker/api";
 import { authenticate } from "../../worker/index";
 import { validate } from "../../worker/validation";
 import fixtures from "./fixtures.json";
-import { generate } from "../../worker/ai";
+import { generate, settleUsage } from "../../worker/ai";
 const uid = "11111111-1111-4111-8111-111111111111",
   other = "22222222-2222-4222-8222-222222222222";
 const env: any = {
@@ -759,6 +759,129 @@ test("automatic planning previews then atomically applies names, related section
       ),
       (e: any) => e.status === 409,
     );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("preflight returns a quote without consent, paid generation, jobs or budget reservations", async () => {
+  const s = new Store(env, uid, transport, true),
+    originalFetch = globalThis.fetch;
+  let calls = 0,
+    quote: any;
+  const before = await s.get("account"),
+    jobs = (await s.list("jobs")).length,
+    usage = (await s.list("usage")).length;
+  globalThis.fetch = async () => {
+    calls++;
+    throw new Error("preflight must not generate");
+  };
+  try {
+    await assert.rejects(
+      generate(
+        s,
+        "section",
+        { section: "concept", requirements: [], answers: {} },
+        { consent: false, maxCostUsd: 5 },
+        { projectId: "quote" },
+      ),
+      (e: any) => {
+        if (e instanceof QuoteReady) {
+          quote = e.quote;
+          return true;
+        }
+        return false;
+      },
+    );
+    assert.equal(calls, 0);
+    assert(quote.maxOutputTokens > 3000);
+    assert(quote.suggestedMaxCostUsd >= quote.estimatedMaxUsd);
+    assert.deepEqual(await s.get("account"), before);
+    assert.equal((await s.list("jobs")).length, jobs);
+    assert.equal((await s.list("usage")).length, usage);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+test("known billing is settled atomically exactly once even after an invalid response", async () => {
+  const s = store(),
+    account = await s.get("account"),
+    stamp = now(),
+    base =
+      account.spend?.month === stamp.slice(0, 7)
+        ? account.spend.reservedUsd
+        : 0;
+  await s.commit([
+    s.prepare(
+      "account",
+      {
+        ...account,
+        spend: { month: stamp.slice(0, 7), reservedUsd: base + 0.05 },
+      },
+      account.revision,
+    ),
+    s.prepare("usage/settle-once", {
+      id: "settle-once",
+      createdAt: stamp,
+      status: "SUBMITTED",
+      reservedUsd: 0.05,
+    }),
+  ]);
+  await Promise.all([
+    settleUsage(s, "settle-once", "FAILED", 0.01),
+    settleUsage(s, "settle-once", "FAILED", 0.01),
+  ]);
+  assert(
+    Math.abs((await s.get("account")).spend.reservedUsd - (base + 0.01)) < 1e-9,
+  );
+  const entry = await s.get("usage/settle-once");
+  assert.equal(entry.settled, true);
+  assert.equal(entry.actualUsd, 0.01);
+});
+
+test("truncated paid response settles its known charge instead of keeping the maximum reservation", async () => {
+  const s = store(),
+    originalFetch = globalThis.fetch,
+    account = await s.get("account"),
+    before = account.spend.reservedUsd;
+  let calls = 0;
+  await s.change("account", account.revision, (d) => {
+    d.rate = {};
+  });
+  globalThis.fetch = async () => {
+    calls++;
+    return Response.json({
+      id: "truncated-with-cost",
+      choices: [
+        { finish_reason: "length", message: { content: "{incomplete" } },
+      ],
+      usage: { cost: 0.0000001 },
+    });
+  };
+  try {
+    await assert.rejects(
+      generate(
+        s,
+        "analysis",
+        { brief: "테스트" },
+        { consent: true, maxCostUsd: 1 },
+        { projectId: "truncated-cost" },
+      ),
+      (e: any) => e.status === 422,
+    );
+    assert.equal(calls, 1);
+    assert(
+      Math.abs(
+        (await s.get("account")).spend.reservedUsd - before - 0.0000001,
+      ) < 1e-9,
+    );
+    const job = (await s.list("jobs")).find(
+      (j) => j.scope?.projectId === "truncated-cost",
+    );
+    const entry = await s.get("usage/" + job!.id);
+    assert.equal(entry.actualUsd, 0.0000001);
+    assert.equal(entry.settled, true);
+    assert.equal(entry.status, "FAILED");
   } finally {
     globalThis.fetch = originalFetch;
   }
