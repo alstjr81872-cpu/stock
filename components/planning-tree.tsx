@@ -39,6 +39,14 @@ export default function PlanningTree({
     [expanded, setExpanded] = useState<Set<string>>(new Set(["root"])),
     [proposal, setProposal] = useState<any>(null),
     [names, setNames] = useState<Record<string, string>>({}),
+    [nameError, setNameError] = useState(""),
+    [rename, setRename] = useState<{
+      entityId: string;
+      original: string;
+      name: string;
+      revision: number;
+      reason?: string;
+    } | null>(null),
     [history, setHistory] = useState<any[] | null>(null);
   const base = "/projects/" + project.id;
   useEffect(() => {
@@ -60,6 +68,21 @@ export default function PlanningTree({
   async function update(p: any) {
     setTree(p.planningTree);
     await onUpdate(p);
+  }
+  function runRename(action: () => Promise<void>) {
+    setNameError("");
+    return run(async () => {
+      try {
+        await action();
+      } catch (error) {
+        setNameError(
+          error instanceof Error
+            ? error.message
+            : "이름을 저장하지 못했습니다.",
+        );
+        throw error;
+      }
+    });
   }
   async function generate(
     nodeId: string,
@@ -377,8 +400,8 @@ export default function PlanningTree({
               .map((i: any) => (
                 <div className="tree-issue" key={i.id}>
                   <small className="mono">{i.id}</small>
-                  <strong>{i.title}</strong>
-                  <p>{i.detail}</p>
+                  <strong>{renderReferences(i.title, entities)}</strong>
+                  <p>{renderReferences(i.detail, entities)}</p>
                   <Button
                     size="sm"
                     variant="secondary"
@@ -406,8 +429,8 @@ export default function PlanningTree({
               공통 인물 · 장소 · 세력
             </h3>
             <p className="muted">
-              같은 ID의 이름은 연결된 트리 화면에서 함께 표시됩니다. 기존 상세
-              문서는 변경 영향 검토가 필요합니다.
+              바꾸기를 누르면 기획 트리·인물 설명·상세 기획서의 이름을 함께
+              갱신합니다.
             </p>
           </div>
           <Badge>{entities.length}개</Badge>
@@ -419,7 +442,7 @@ export default function PlanningTree({
                 {e.role || e.kind} · {e.id}
               </small>
               <strong>{e.name}</strong>
-              <p>{e.description}</p>
+              <p>{renderReferences(e.description, entities)}</p>
               <div className="tree-name-edit">
                 <input
                   aria-label={e.name + " 이름"}
@@ -431,24 +454,19 @@ export default function PlanningTree({
                 <Button
                   size="sm"
                   variant="secondary"
-                  disabled={
-                    busy || !names[e.id]?.trim() || names[e.id] === e.name
-                  }
-                  onClick={() =>
-                    run(async () => {
-                      await update(
-                        await send(
-                          base + "/tree/entities/" + e.id,
-                          { revision: project.revision, name: names[e.id] },
-                          "PUT",
-                        ),
-                      );
-                      notify("공통 이름과 연결 영향을 반영했습니다.");
-                    })
-                  }
+                  disabled={busy}
+                  onClick={() => {
+                    setNameError("");
+                    setRename({
+                      entityId: e.id,
+                      original: e.name,
+                      name: names[e.id] ?? e.name,
+                      revision: project.revision,
+                    });
+                  }}
                 >
                   <Save size={14} />
-                  변경
+                  바꾸기
                 </Button>
               </div>
             </div>
@@ -473,6 +491,110 @@ export default function PlanningTree({
           상세 모듈 보기
         </Button>
       </div>
+      {rename && (
+        <Modal title="이름 바꾸기" onClose={() => !busy && setRename(null)}>
+          <div className="modal-body">
+            <p>
+              <strong>{rename.original}</strong>의 새 이름을 직접 입력하거나
+              자동으로 제안받으세요.
+            </p>
+            <label className="field">
+              새 이름
+              <input
+                aria-label="바꿀 새 이름"
+                maxLength={100}
+                value={rename.name}
+                onChange={(event) =>
+                  setRename({
+                    ...rename,
+                    name: event.target.value,
+                    reason: undefined,
+                  })
+                }
+              />
+            </label>
+            <Button
+              variant="secondary"
+              disabled={busy}
+              onClick={() =>
+                runRename(async () => {
+                  const path =
+                    base +
+                    "/tree/entities/" +
+                    rename.entityId +
+                    "/suggest-name";
+                  const data = { revision: rename.revision };
+                  const max = await askAI(
+                    "선택한 인물의 역할·배경과 작품 세계관에 맞는 새 이름 하나를 제안합니다. 확인 전에는 반영하지 않습니다.",
+                    { path, data },
+                  );
+                  if (max === null) return;
+                  const suggestion = await send(path, {
+                    ...data,
+                    consent: true,
+                    maxCostUsd: max,
+                  });
+                  setRename({
+                    ...rename,
+                    name: suggestion.name,
+                    reason: suggestion.reason,
+                  });
+                })
+              }
+            >
+              <Sparkles size={15} /> 새 이름 자동 제안
+            </Button>
+            {rename.reason && <p>{rename.reason}</p>}
+            {nameError && <p role="alert">{nameError}</p>}
+            <p className="muted">
+              기획 트리·등록부 설명·상세 기획서에서 같은 대상의 이름을 함께
+              바꿉니다. 원문 자료와 이미 작성한 원고는 보존합니다. 동명이인처럼
+              구분이 어려운 문장은 자동 치환하지 않습니다.
+            </p>
+            {rename.revision !== project.revision && (
+              <p role="alert">
+                기획이 변경되었습니다. 닫은 뒤 최신 이름으로 다시 시작해주세요.
+              </p>
+            )}
+          </div>
+          <footer className="modal-body button-row">
+            <Button
+              variant="secondary"
+              disabled={busy}
+              onClick={() => setRename(null)}
+            >
+              취소
+            </Button>
+            <Button
+              disabled={
+                busy ||
+                !rename.name.trim() ||
+                rename.name.trim() === rename.original ||
+                rename.revision !== project.revision
+              }
+              onClick={() =>
+                runRename(async () => {
+                  const next = await send(
+                    base + "/tree/entities/" + rename.entityId,
+                    { revision: rename.revision, name: rename.name.trim() },
+                    "PUT",
+                  );
+                  await update(next);
+                  setNames((prev) => {
+                    const n = { ...prev };
+                    delete n[rename.entityId];
+                    return n;
+                  });
+                  setRename(null);
+                  notify("이름과 연결된 기획 문서를 함께 바꿨습니다.");
+                })
+              }
+            >
+              <Save size={15} /> 이 이름으로 바꾸기
+            </Button>
+          </footer>
+        </Modal>
+      )}
       {proposal && (
         <Modal title="연결된 기획 제안" wide onClose={() => setProposal(null)}>
           <div className="modal-body tree-proposal">
@@ -506,7 +628,12 @@ export default function PlanningTree({
                     <strong>
                       {e.name} · {e.role || e.kind}
                     </strong>
-                    <p>{e.description}</p>
+                    <p>
+                      {renderReferences(
+                        e.description,
+                        proposal.preview.entities,
+                      )}
+                    </p>
                   </div>
                 ))}
               </>
@@ -514,10 +641,15 @@ export default function PlanningTree({
             {proposal.patch.issues.map((i: any) => (
               <div className="warning-box" key={i.id}>
                 <strong>
-                  {i.title} ·{" "}
+                  {renderReferences(i.title, proposal.preview.entities)} ·{" "}
                   {i.status === "resolved" ? "해결안 있음" : "미해결"}
                 </strong>
-                <p>{i.resolution || i.detail}</p>
+                <p>
+                  {renderReferences(
+                    i.resolution || i.detail,
+                    proposal.preview.entities,
+                  )}
+                </p>
               </div>
             ))}
             <p className="muted">

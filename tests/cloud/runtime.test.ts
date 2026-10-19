@@ -12,6 +12,40 @@ test("authenticated dashboard reads Supabase through the real Workers fetch runt
     write: false,
   });
   const requests: string[] = [];
+  let project: any = {
+    id: "rename",
+    ownerUid: "11111111-1111-4111-8111-111111111111",
+    revision: 1,
+    bible: {
+      characters: {
+        content: "카일 베르너는 도윤과 같은 몸을 쓴다.",
+        openQuestions: [],
+        conflicts: [],
+      },
+    },
+    planningTree: {
+      foundationReady: true,
+      nodes: [
+        {
+          id: "root",
+          parentId: null,
+          content: "카일 베르너의 이야기다.",
+          entityIds: ["person_main"],
+          dependsOn: [],
+        },
+      ],
+      entities: [
+        {
+          id: "person_main",
+          name: "카일 베르너",
+          kind: "person",
+          description: "카일 베르너에게 빙의한 도윤이다.",
+          nodeIds: ["root"],
+        },
+      ],
+      issues: [],
+    },
+  };
   const mf = new Miniflare(
     convertV4MiniflareOptions({
       modules: true,
@@ -58,7 +92,16 @@ test("authenticated dashboard reads Supabase through the real Workers fetch runt
           request.headers.get("authorization"),
           "Bearer fixture-server-key",
         );
+        if (url.pathname === "/rest/v1/rpc/nf_commit") {
+          const body: any = await request.json();
+          project = body.p_operations.find(
+            (o: any) => o.path === "projects/rename",
+          ).data;
+          return new Response(null, { status: 204 });
+        }
         assert.equal(url.pathname, "/rest/v1/nf_documents");
+        if (url.searchParams.get("path") === "eq.projects/rename")
+          return Response.json([{ data: project }]);
         if (url.searchParams.get("path") === "eq.account")
           return Response.json([
             {
@@ -123,6 +166,24 @@ test("authenticated dashboard reads Supabase through the real Workers fetch runt
     assert(quote.suggestedMaxCostUsd > 0);
     assert(!requests.includes("/api/v1/chat/completions"));
     assert(!requests.some((p) => p.includes("/rpc/")));
+    const renamed = await mf.dispatchFetch(
+      "https://app.test/api/projects/rename/tree/entities/person_main",
+      {
+        method: "PUT",
+        headers: {
+          Authorization: "Bearer fixture-session",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ revision: 1, name: "에단 로웰" }),
+      },
+    );
+    const renamedData: any = await renamed.json();
+    assert.equal(renamed.status, 200, JSON.stringify(renamedData));
+    assert.equal(renamedData.planningTree.entities[0].name, "에단 로웰");
+    assert.equal(
+      renamedData.bible.characters.content,
+      "에단 로웰는 도윤과 같은 몸을 쓴다.",
+    );
     const unauthenticated = await mf.dispatchFetch("https://app.test/api/me");
     assert.equal(unauthenticated.status, 401);
   } finally {

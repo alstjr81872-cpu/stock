@@ -1081,3 +1081,125 @@ test("common tree foundation, linked refinement, stable issue resolution and sha
     globalThis.fetch = originalFetch;
   }
 });
+
+test("name suggestion is quoted before payment and explicit rename updates planning prose while preserving sources", async () => {
+  const s = store(),
+    pid = "rename-prose",
+    originalFetch = globalThis.fetch;
+  let p = await s.create(`projects/${pid}`, {
+    title: "아카데미",
+    genre: "판타지",
+    status: "ACTIVE",
+    brief: { text: "카일 베르너는 원문의 이름이다." },
+    requirements: [{ id: "R001", text: "카일 베르너는 원문의 이름이다." }],
+    bible: {
+      characters: {
+        content: "카일 베르너의 몸에 빙의한 한도윤이다.",
+        openQuestions: ["카일 베르너의 목표는?"],
+        conflicts: [],
+      },
+    },
+    plot: { status: "APPROVED", chapters: [] },
+    planningTree: {
+      foundationReady: true,
+      nodes: [
+        {
+          id: "root",
+          parentId: null,
+          title: "카일 베르너의 이야기",
+          content: "카일 베르너는 레온 아르덴과 만난다.",
+        },
+      ],
+      entities: [
+        {
+          id: "person_main",
+          name: "카일 베르너",
+          kind: "person",
+          description: "카일 베르너와 한도윤은 같은 몸이다.",
+        },
+        {
+          id: "person_hero",
+          name: "레온 아르덴",
+          kind: "person",
+          description: "카일 베르너를 만나는 원작 주인공.",
+        },
+      ],
+    },
+  });
+  const account = await s.get("account");
+  await s.change("account", account.revision, (d) => {
+    d.rate = {};
+  });
+  let paid = 0;
+  globalThis.fetch = async () => {
+    paid++;
+    return Response.json({
+      choices: [
+        {
+          finish_reason: "stop",
+          message: {
+            content: JSON.stringify({
+              name: "에단 로웰",
+              reason: "아카데미 배경과 연금술사 역할에 어울리는 이름입니다.",
+            }),
+          },
+        },
+      ],
+      usage: { cost: 0 },
+    });
+  };
+  try {
+    const path = `/projects/${pid}/tree/entities/person_main/suggest-name`;
+    await assert.rejects(
+      handleApi(
+        req(path, { revision: p.revision, consent: false, maxCostUsd: 5 }),
+        new Store(env, uid, transport, true),
+      ),
+      (e: any) => e instanceof QuoteReady && e.quote.suggestedMaxCostUsd > 0,
+    );
+    assert.equal(paid, 0);
+    const suggestion: any = await handleApi(
+      req(path, { revision: p.revision, consent: true, maxCostUsd: 1 }),
+      s,
+    );
+    assert.equal(paid, 1);
+    assert.equal(suggestion.name, "에단 로웰");
+    assert.equal((await s.get(`projects/${pid}`)).revision, p.revision);
+    p = (await handleApi(
+      req(
+        `/projects/${pid}/tree/entities/person_main`,
+        { revision: p.revision, name: suggestion.name },
+        "PUT",
+      ),
+      s,
+    )) as any;
+    assert.equal(paid, 1);
+    assert.equal(
+      p.bible.characters.content,
+      "에단 로웰의 몸에 빙의한 한도윤이다.",
+    );
+    assert.equal(p.bible.characters.openQuestions[0], "에단 로웰의 목표는?");
+    assert.equal(p.planningTree.entities[1].name, "레온 아르덴");
+    assert(p.planningTree.entities[1].description.includes("에단 로웰"));
+    assert.equal(p.brief.text, "카일 베르너는 원문의 이름이다.");
+    assert.equal(p.requirements[0].text, p.brief.text);
+    assert.equal(p.plot.status, "INVALIDATED");
+    assert.equal(p.planningTree.nodes[0].status, "needsReview");
+    assert.deepEqual(p.planningTree.entities[0].aliases, ["카일 베르너"]);
+    const history = await s.list(`projects/${pid}/tree_history`);
+    assert.equal(history[0].beforeTree.entities[0].name, "카일 베르너");
+    await assert.rejects(
+      handleApi(
+        req(
+          `/projects/${pid}/tree/entities/person_main`,
+          { revision: p.revision, name: "레온 아르덴" },
+          "PUT",
+        ),
+        s,
+      ),
+      (e: any) => e.status === 422,
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

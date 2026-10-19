@@ -3,8 +3,9 @@ import { validate } from "./validation";
 const taskNames: Record<string, string> = {
   analysis: "원문 분석",
   auto_plan: "자동 기획",
-  tree_foundation:"공통 기획",
-  tree_expand:"가지 구체화",
+  tree_foundation: "공통 기획",
+  tree_expand: "가지 구체화",
+  entity_name: "이름 제안",
   section: "모듈 생성",
   style: "문체 분석",
   style_interview: "문체 인터뷰",

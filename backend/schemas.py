@@ -317,3 +317,8 @@ class TreeRequest(AIRequest):
 
 class RenameEntity(Revision):
     name: str = Field(min_length=1, max_length=100)
+
+
+class EntityNameSuggestion(Strict):
+    name: str = Field(min_length=1, max_length=100)
+    reason: str = Field(min_length=10, max_length=1000)

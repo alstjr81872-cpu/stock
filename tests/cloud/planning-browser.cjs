@@ -109,7 +109,8 @@ const fixtures = require("./fixtures.json");
     let pending,
       preflights = 0,
       generations = 0,
-      applies = 0;
+      applies = 0,
+      nameSuggestions = 0;
     const clean = (n) =>
       Object.fromEntries(
         [
@@ -144,7 +145,30 @@ const fixtures = require("./fixtures.json");
       else if (path === "/api/styles") data = [];
       else if (path === "/api/projects/tree-ui") data = p;
       else if (path.endsWith("/tree")) data = seedTree(p);
-      else if (path.endsWith("/tree/foundation") || path.endsWith("/expand")) {
+      else if (path.endsWith("/suggest-name")) {
+        if (request.headers()["x-nf-preflight"] === "1")
+          data = {
+            estimateOnly: true,
+            model: "test/model",
+            estimatedMaxUsd: 0.01,
+            suggestedMaxCostUsd: 0.01,
+            remainingMonthlyUsd: 5,
+            maxOutputTokens: 1024,
+          };
+        else {
+          nameSuggestions++;
+          assert.equal(request.postDataJSON().consent, true);
+          assert.equal(request.postDataJSON().maxCostUsd, 0.01);
+          data = {
+            name: "윤서진",
+            reason: "기록관의 배경과 주인공의 성격에 어울리는 이름입니다.",
+            projectRevision: p.revision,
+          };
+        }
+      } else if (
+        path.endsWith("/tree/foundation") ||
+        path.endsWith("/expand")
+      ) {
         if (request.headers()["x-nf-preflight"] === "1") {
           preflights++;
           data = {
@@ -285,10 +309,36 @@ const fixtures = require("./fixtures.json");
     await modal.waitFor({ state: "hidden" });
     assert.equal(applies, 1);
     assert.equal(p.bible.characters.content, old.content);
+    await page.getByRole("button", { name: "바꾸기", exact: true }).click();
+    const renameModal = page.getByRole("dialog", {
+      name: "이름 바꾸기",
+      exact: true,
+    });
+    await renameModal
+      .getByRole("button", { name: "새 이름 자동 제안", exact: true })
+      .click();
     await page
-      .getByRole("textbox", { name: "서도윤 이름", exact: true })
-      .fill("윤서진");
-    await page.getByRole("button", { name: "변경", exact: true }).click();
+      .getByRole("checkbox", { name: "전송 범위와 실행 한도를 확인했습니다." })
+      .check();
+    assert.equal(nameSuggestions, 0);
+    await page
+      .getByRole("button", { name: "확인하고 실행", exact: true })
+      .click();
+    await renameModal
+      .getByText("기록관의 배경과 주인공의 성격에 어울리는 이름입니다.")
+      .waitFor();
+    assert.equal(nameSuggestions, 1);
+    assert.equal(p.planningTree.entities[0].name, "서도윤");
+    assert.equal(
+      await renameModal
+        .getByRole("textbox", { name: "바꿀 새 이름" })
+        .inputValue(),
+      "윤서진",
+    );
+    await renameModal
+      .getByRole("button", { name: "이 이름으로 바꾸기", exact: true })
+      .click();
+    await renameModal.waitFor({ state: "hidden" });
     await page
       .getByRole("textbox", { name: "윤서진 이름", exact: true })
       .waitFor();

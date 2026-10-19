@@ -5,6 +5,7 @@ import {
   proposeTree,
   applyTree,
   renameEntity,
+  suggestEntityName,
   syncModuleTree,
 } from "./tree";
 import {
@@ -677,6 +678,14 @@ export async function handleApi(request: Request, s: Store): Promise<unknown> {
       method === "POST"
     )
       return proposeTree(s, p, parts[4], body);
+    if (
+      parts[2] === "tree" &&
+      parts[3] === "entities" &&
+      parts.length === 6 &&
+      parts[5] === "suggest-name" &&
+      method === "POST"
+    )
+      return suggestEntityName(s, p, parts[4], body);
     if (
       parts[2] === "tree" &&
       parts[3] === "entities" &&

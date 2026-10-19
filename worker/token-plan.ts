@@ -51,6 +51,7 @@ export function tokenPlan(
     auto_plan: [3072, 24576],
     tree_foundation: [3072, 16384],
     tree_expand: [2048, 12288],
+    entity_name: [256, 1024],
     review: [4096, 8192],
     write: [2048, Math.max(8192, chars * 3)],
     rewrite: [1024, Math.max(4096, chars * 3)],

@@ -1,4 +1,4 @@
-import { type Env, HttpError, requireThat, QuoteReady } from "./shared";
+import { type Env, HttpError, requireThat, QuoteReady, id } from "./shared";
 import { Store } from "./store";
 import { handleApi } from "./api";
 const privacy = {
@@ -136,12 +136,30 @@ export default {
           { estimateOnly: true, ...e.quote },
           { headers: privacy },
         );
+      const reference = id();
+      if (!(e instanceof HttpError))
+        console.error(
+          JSON.stringify({
+            event: "api_unhandled",
+            reference,
+            type: e instanceof Error ? e.name : "UnknownError",
+            // Only stack frames: exclude the exception message and request data.
+            frames:
+              e instanceof Error
+                ? e.stack
+                    ?.split("\n")
+                    .filter((line) => /^\s+at /.test(line))
+                    .slice(0, 6)
+                : [],
+          }),
+        );
       return Response.json(
         {
           detail:
             e instanceof HttpError
               ? e.detail
-              : "서버 요청에 실패했습니다. 연결 설정과 작업 기록을 확인하세요.",
+              : "서버 처리 중 오류가 발생했습니다. 저장 여부를 확인한 뒤 다시 불러와주세요. 오류 번호: " +
+                reference,
         },
         { status: e instanceof HttpError ? e.status : 500, headers: privacy },
       );

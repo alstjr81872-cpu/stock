@@ -16,9 +16,60 @@ import {
   entityReferences,
   descendants,
   renderReferences,
+  replaceEntityName,
 } from "../lib/planning-tree";
 export function seedTree(p: Doc): Doc {
-  if (p.planningTree) return structuredClone(p.planningTree);
+  if (p.planningTree) {
+    const tree = structuredClone(p.planningTree);
+    check(
+      Array.isArray(tree.nodes) && Array.isArray(tree.entities),
+      "공통 기획 데이터의 가지와 등록부를 확인해주세요. 변경 이력 또는 내보내기로 기존 자료를 확인할 수 있습니다.",
+      422,
+    );
+    tree.issues ??= [];
+    tree.decisions ??= [];
+    check(
+      Array.isArray(tree.issues) && Array.isArray(tree.decisions),
+      "공통 기획의 문제·결정 목록 형식을 확인해주세요.",
+      422,
+    );
+    for (const node of tree.nodes) {
+      node.entityIds ??= [];
+      node.requirementIds ??= [];
+      node.dependsOn ??= [];
+      node.content ??= "";
+      check(
+        [node.entityIds, node.requirementIds, node.dependsOn].every(
+          Array.isArray,
+        ) && typeof node.content === "string",
+        "기획 가지의 연결 데이터 형식을 확인해주세요.",
+        422,
+      );
+    }
+    for (const entity of tree.entities) {
+      entity.aliases ??= [];
+      entity.nodeIds ??= [];
+      entity.role ??= "";
+      entity.description ??= "";
+      check(
+        Array.isArray(entity.aliases) &&
+          Array.isArray(entity.nodeIds) &&
+          typeof entity.name === "string",
+        "공통 등록부의 이름·연결 데이터 형식을 확인해주세요.",
+        422,
+      );
+    }
+    for (const issue of tree.issues) {
+      issue.nodeIds ??= [];
+      issue.entityIds ??= [];
+      check(
+        Array.isArray(issue.nodeIds) && Array.isArray(issue.entityIds),
+        "미정·충돌의 연결 데이터 형식을 확인해주세요.",
+        422,
+      );
+    }
+    return tree;
+  }
   const nodes = Object.entries(branchLabels).map(([key, title]) => ({
     id: key,
     parentId: key === "root" ? null : "root",
@@ -128,7 +179,17 @@ export function mergeTree(
     const old = entityMap.get(e.id);
     if (old)
       check(old.kind === e.kind, "기존 대상의 종류를 바꿀 수 없습니다.", 422);
-    entityMap.set(e.id, { ...e, version: (old?.version ?? 0) + 1 });
+    entityMap.set(e.id, {
+      ...e,
+      aliases: [
+        ...new Set([
+          ...(old?.aliases ?? []),
+          ...(old && old.name !== e.name ? [old.name] : []),
+          ...e.aliases,
+        ]),
+      ],
+      version: (old?.version ?? 0) + 1,
+    });
   }
   check(
     nodeMap.size <= 160 && entityMap.size <= 100,
@@ -226,6 +287,23 @@ export function mergeTree(
   next.nodes = [...nodeMap.values()];
   next.entities = [...entityMap.values()];
   next.issues = [...issueMap.values()];
+  // New planning prose uses stable references even if the model wrote names
+  // literally. Future renames then update it through the shared registry.
+  for (const entity of next.entities) {
+    const link = (text: string) =>
+      replaceEntityName(
+        text,
+        next.entities,
+        entity.id,
+        "{{entity:" + entity.id + "}}",
+      );
+    for (const node of next.nodes) node.content = link(node.content);
+    for (const other of next.entities)
+      other.description = link(other.description);
+    for (const issue of next.issues)
+      for (const key of ["title", "detail", "resolution"])
+        if (typeof issue[key] === "string") issue[key] = link(issue[key]);
+  }
   next.foundationReady = foundation || tree.foundationReady;
   return next;
 }
@@ -324,15 +402,21 @@ export async function applyTree(s: Store, p: Doc, body: Doc) {
       name: e.name,
       background: e.description,
     }));
-  for (const section of Object.values(next.bible) as Doc[])
+  for (const section of Object.values(next.bible ?? {}) as Doc[])
     section.needsReview = true;
   for (const patch of proposal.patch.nodes) {
     if (!patch.id.startsWith("module-")) continue;
     const key = patch.id.slice(7);
-    if (next.bible[key])
-      next.bible[key].content = renderReferences(patch.content, tree.entities);
+    if (next.bible?.[key])
+      next.bible[key].content = renderReferences(
+        tree.nodes.find((n: Doc) => n.id === patch.id).content,
+        tree.entities,
+      );
   }
-  for (const [key, section] of Object.entries(next.bible) as [string, Doc][]) {
+  for (const [key, section] of Object.entries(next.bible ?? {}) as [
+    string,
+    Doc,
+  ][]) {
     for (const type of ["openQuestions", "conflicts"]) {
       const source = tree.issues.filter(
         (i: Doc) =>
@@ -345,7 +429,7 @@ export async function applyTree(s: Store, p: Doc, body: Doc) {
           .filter((i: Doc) => i.status === "resolved")
           .map((i: Doc) => i.sourceIndex),
       );
-      section[type] = section[type].filter(
+      section[type] = (section[type] ?? []).filter(
         (_v: string, i: number) => !removed.has(i),
       );
       for (const issue of source) {
@@ -376,6 +460,48 @@ export async function applyTree(s: Store, p: Doc, body: Doc) {
   ]);
   return op.data;
 }
+export async function suggestEntityName(
+  s: Store,
+  p: Doc,
+  entityId: string,
+  body: Doc,
+) {
+  validate("AIRequest", body);
+  revision(p, body.revision);
+  const tree = seedTree(p),
+    entity = tree.entities.find((e: Doc) => e.id === entityId);
+  check(entity, "공통 대상이 없습니다.", 404);
+  const { result, run } = await generate(
+    s,
+    "entity_name",
+    {
+      title: p.title,
+      genre: p.genre,
+      entity,
+      existing_names: tree.entities.flatMap((e: Doc) => [e.name, ...e.aliases]),
+      context: tree.nodes
+        .filter(
+          (n: Doc) =>
+            n.id === "world" ||
+            n.id === "root" ||
+            entity.nodeIds.includes(n.id),
+        )
+        .slice(0, 6)
+        .map((n: Doc) => ({ title: n.title, content: n.content })),
+    },
+    body,
+    { projectId: p.id, entityId },
+  );
+  const name = result.name.trim();
+  check(
+    name &&
+      !/[{}\r\n]/u.test(name) &&
+      !tree.entities.some((e: Doc) => [e.name, ...e.aliases].includes(name)),
+    "제안된 이름이 기존 이름과 겹치거나 올바르지 않습니다. 직접 새 이름을 입력할 수 있습니다. 자동 재요청하지 않았습니다.",
+    422,
+  );
+  return { ...result, name, entityId, projectRevision: p.revision, run };
+}
 export async function renameEntity(
   s: Store,
   p: Doc,
@@ -388,15 +514,46 @@ export async function renameEntity(
     entity = tree.entities.find((e: Doc) => e.id === entityId);
   check(entity, "공통 대상이 없습니다.", 404);
   const oldName = entity.name;
-  entity.name = body.name.trim();
-  check(entity.name, "이름을 입력하세요.", 422);
+  const newName = body.name.trim();
+  check(newName, "이름을 입력하세요.", 422);
+  check(
+    !/[{}\r\n]/u.test(newName),
+    "이름에 줄바꿈이나 참조 기호를 넣을 수 없습니다.",
+    422,
+  );
+  check(
+    !tree.entities.some((e: Doc) => e.id !== entityId && e.name === newName),
+    "다른 등록 대상이 사용하는 이름입니다. 구분할 수 있는 이름을 입력하세요.",
+    422,
+  );
+  if (newName === oldName) return p;
+  const oldEntities = structuredClone(tree.entities);
+  const replace = (text: string) =>
+    replaceEntityName(text, oldEntities, entityId, newName);
+  const changedNodes = new Set<string>();
+  for (const n of tree.nodes) {
+    for (const key of ["title", "content"]) {
+      if (typeof n[key] !== "string") continue;
+      const updated = replace(n[key]);
+      if (updated !== n[key]) changedNodes.add(n.id);
+      n[key] = updated;
+    }
+  }
+  for (const e of tree.entities)
+    for (const key of ["role", "description"])
+      if (typeof e[key] === "string") e[key] = replace(e[key]);
+  for (const issue of tree.issues)
+    for (const key of ["title", "detail", "resolution"])
+      if (typeof issue[key] === "string") issue[key] = replace(issue[key]);
+  entity.name = newName;
   entity.version = (entity.version ?? 0) + 1;
   entity.aliases = [...new Set([...entity.aliases, oldName])];
   const touched = tree.nodes.filter(
     (n: Doc) =>
       n.entityIds.includes(entityId) ||
       entityReferences(n.content).includes(entityId) ||
-      entity.nodeIds.includes(n.id),
+      entity.nodeIds.includes(n.id) ||
+      changedNodes.has(n.id),
   );
   const affected = new Set<string>();
   for (const n of touched) {
@@ -430,7 +587,16 @@ export async function renameEntity(
       name: e.name,
       background: e.description,
     }));
-  for (const sec of Object.values(next.bible) as Doc[]) sec.needsReview = true;
+  for (const sec of Object.values(next.bible ?? {}) as Doc[]) {
+    if (typeof sec.content === "string")
+      sec.content = renderReferences(replace(sec.content), tree.entities);
+    for (const key of ["openQuestions", "conflicts"])
+      if (Array.isArray(sec[key]))
+        sec[key] = sec[key].map((text: string) =>
+          renderReferences(replace(text), tree.entities),
+        );
+    sec.needsReview = true;
+  }
   const op = s.prepare("projects/" + p.id, next, p.revision);
   await s.commit([
     op,

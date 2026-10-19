@@ -26,6 +26,45 @@ export function renderReferences(text: string, entities: TreeRecord[]) {
       entities.find((e) => e.id === key)?.name ?? `[연결 확인: ${key}]`,
   );
 }
+// Prefer the longest registered name. Never replace another person's longer
+// name, an ambiguous alias, an entity ID, or part of an unrelated word.
+export function replaceEntityName(
+  text: string,
+  entities: TreeRecord[],
+  entityId: string,
+  replacement: string,
+): string {
+  const owners = new Map<string, Set<string>>();
+  for (const e of entities)
+    for (const name of [e.name, ...(e.aliases ?? [])]) {
+      if (typeof name !== "string" || name.trim().length < 2) continue;
+      const set = owners.get(name) ?? new Set<string>();
+      set.add(e.id);
+      owners.set(name, set);
+    }
+  const names = [...owners.keys()].sort((a, b) => b.length - a.length);
+  if (!names.length) return text;
+  const escaped = names.map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  const pattern = new RegExp(
+    "\\{\\{entity:[A-Za-z0-9_-]+\\}\\}|" + escaped.join("|"),
+    "gu",
+  );
+  return text.replace(pattern, (match, offset: number) => {
+    const set = owners.get(match);
+    if (!set || set.size !== 1 || !set.has(entityId)) return match;
+    const before = text.slice(0, offset).at(-1) ?? "";
+    const after = text.slice(offset + match.length);
+    if (/[\p{L}\p{N}_]/u.test(before)) return match;
+    if (
+      /^[\p{L}\p{N}_]/u.test(after) &&
+      !/^(?:은|는|이|가|을|를|와|과|의|에|도|만|로|으로|에게|처럼|보다|부터|까지|이라|라고|라는|이다|였다)/u.test(
+        after,
+      )
+    )
+      return match;
+    return replacement;
+  });
+}
 export function entityReferences(text: string): string[] {
   return [...(text ?? "").matchAll(/\{\{entity:([A-Za-z0-9_-]+)\}\}/g)].map(
     (m) => m[1],

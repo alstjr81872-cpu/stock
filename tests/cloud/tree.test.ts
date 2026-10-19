@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { seedTree, mergeTree, syncModuleTree } from "../../worker/tree";
-import { renderReferences } from "../../lib/planning-tree";
+import { renderReferences, replaceEntityName } from "../../lib/planning-tree";
 import fixtures from "./fixtures.json";
 const p = () => ({
   title: "기획 트리",
@@ -177,4 +177,69 @@ test("document projections preserve the core plan while manual edits flag their 
     "needsReview",
   );
   assert.equal(original.planningTree.issues[0].status, "open");
+});
+
+test("literal name replacement protects longer names, ambiguous aliases, IDs and unrelated words", () => {
+  const entities = [
+    { id: "person_main", name: "카일", aliases: ["도윤", "왕자"] },
+    { id: "other", name: "카일 베르너", aliases: ["왕자"] },
+    { id: "cat", name: "미오", aliases: [] },
+  ];
+  assert.equal(
+    replaceEntityName(
+      "카일은 카일 베르너와 도윤의 왕자를 만난다. {{entity:person_main}}",
+      entities,
+      "person_main",
+      "에단",
+    ),
+    "에단은 카일 베르너와 에단의 왕자를 만난다. {{entity:person_main}}",
+  );
+  assert.equal(
+    replaceEntityName(
+      "미오의 친구 미오네와 마미오, 미오를 부른다.",
+      entities,
+      "cat",
+      "루나",
+    ),
+    "루나의 친구 미오네와 마미오, 루나를 부른다.",
+  );
+});
+
+test("older trees default absent optional arrays and reject malformed links clearly", () => {
+  const original: any = p();
+  original.planningTree = {
+    nodes: [{ id: "root", content: "큰 틀" }],
+    entities: [{ id: "person_main", name: "카일" }],
+  };
+  const tree = seedTree(original);
+  assert.deepEqual(tree.entities[0].aliases, []);
+  assert.deepEqual(tree.nodes[0].dependsOn, []);
+  assert.equal(original.planningTree.entities[0].aliases, undefined);
+  original.planningTree.nodes[0].entityIds = "bad";
+  assert.throws(
+    () => seedTree(original),
+    (e: any) => e.status === 422,
+  );
+});
+
+test("later tree refinements preserve old names as aliases and link literal names to canonical IDs", () => {
+  const original = p(),
+    first = patch(seedTree(original));
+  first.nodes[0].content = "서도윤의 선택으로 새로운 사건이 시작됩니다.";
+  const tree = mergeTree(
+    seedTree(original),
+    first,
+    original.requirements,
+    "root",
+    true,
+  );
+  assert(tree.nodes[0].content.includes("{{entity:person_main}}"));
+  const nextPatch = patch(seedTree(original));
+  nextPatch.entities[0].name = "윤서진";
+  nextPatch.nodes[0].content = "서도윤의 선택으로 새로운 사건이 시작됩니다.";
+  const next = mergeTree(tree, nextPatch, original.requirements, "root", true);
+  assert(next.entities[0].aliases.includes("서도윤"));
+  assert(
+    renderReferences(next.nodes[0].content, next.entities).includes("윤서진"),
+  );
 });
