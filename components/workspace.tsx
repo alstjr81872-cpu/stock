@@ -43,6 +43,7 @@ import StyleLibrary from "./style-library";
 import SettingsView from "./settings-view";
 
 type Context = {
+  mode?: string;
   busy: boolean;
   run: (fn: () => Promise<void>) => Promise<void>;
   askAI: (
@@ -387,6 +388,7 @@ export default function Workspace() {
       value={{
         busy,
         run,
+        mode: me?.mode,
         askAI,
         notify: setToast,
         refresh,

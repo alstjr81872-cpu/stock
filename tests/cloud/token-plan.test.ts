@@ -134,3 +134,39 @@ test("preflight can price an expensive task without the old arbitrary fifteen-ce
   );
   assert.equal(compact.maxOutputTokens, 2048);
 });
+
+test("tree prompt input keeps stable links while stripping database-only metadata", () => {
+  const node = {
+    id: "characters",
+    parentId: "root",
+    kind: "branch",
+    title: "인물",
+    content: "{{entity:person_main}}의 기획",
+    entityIds: ["person_main"],
+    requirementIds: ["R001"],
+    dependsOn: ["world"],
+    status: "needsReview",
+    updatedAt: "now",
+  };
+  const issue = {
+    id: "issue-1",
+    title: "다듬은 문장",
+    detail: "이름을 정한다.",
+    nodeIds: ["characters"],
+    entityIds: ["person_main"],
+    status: "open",
+    resolution: "",
+    sourceModule: "characters",
+    sourceIndex: 0,
+  };
+  const packed = efficientInput("tree_expand", {
+    tree: { nodes: [node], entities: [], issues: [issue] },
+    selected_node: node,
+    focus_issue: issue,
+  });
+  assert.equal(packed.tree.nodes[0].status, undefined);
+  assert.equal(packed.selected_node.updatedAt, undefined);
+  assert.equal(packed.focus_issue.sourceModule, undefined);
+  assert.equal(packed.focus_issue.id, "issue-1");
+  assert.deepEqual(packed.selected_node.dependsOn, ["world"]);
+});

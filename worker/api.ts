@@ -1,6 +1,13 @@
 import { Store, type Operation } from "./store";
 import { proposePlanning, applyPlanning } from "./planning";
 import {
+  seedTree,
+  proposeTree,
+  applyTree,
+  renameEntity,
+  syncModuleTree,
+} from "./tree";
+import {
   type Doc,
   HttpError,
   requireThat as check,
@@ -102,6 +109,7 @@ async function compile(s: Store, p: Doc, sceneId: string) {
       L3: {
         requirements: p.requirements,
         bible: p.bible,
+        common_planning_tree: p.planningTree ?? null,
         planning_decisions: p.planningDecisions ?? [],
         character_names: p.characterNames ?? [],
         canonVersion: p.canonVersion,
@@ -549,6 +557,8 @@ export async function handleApi(request: Request, s: Store): Promise<unknown> {
         "revision_runs",
         "planning_proposals",
         "planning_history",
+        "tree_proposals",
+        "tree_history",
       ])
         subcollections[name] = await s.list(`${pp}/${name}`);
       files["project.json"] = bytes(
@@ -596,6 +606,8 @@ export async function handleApi(request: Request, s: Store): Promise<unknown> {
         d.answers = body.answers;
         invalidate(d);
         for (const sec of values(d.bible)) sec.needsReview = true;
+        if (d.planningTree)
+          for (const node of d.planningTree.nodes) node.status = "needsReview";
       });
     }
     if (action === "analysis" && method === "PUT") {
@@ -605,6 +617,8 @@ export async function handleApi(request: Request, s: Store): Promise<unknown> {
         d.analysis = body.analysis;
         d.status = "DRAFT_BIBLE";
         for (const sec of values(d.bible)) sec.needsReview = true;
+        if (d.planningTree)
+          for (const node of d.planningTree.nodes) node.status = "needsReview";
       });
     }
     if (action === "analyze" && method === "POST") {
@@ -633,6 +647,43 @@ export async function handleApi(request: Request, s: Store): Promise<unknown> {
         }),
       );
     }
+    if (action === "tree/history" && method === "GET")
+      return s.list(pp + "/tree_history");
+    if (action === "tree" && method === "GET")
+      return { ...seedTree(p), projectRevision: p.revision };
+    if (action === "tree/foundation" && method === "POST")
+      return proposeTree(s, p, "root", body, true);
+    if (action === "tree/apply" && method === "POST")
+      return applyTree(s, p, body);
+    if (
+      parts[2] === "tree" &&
+      parts[3] === "nodes" &&
+      parts[5] === "reviewed" &&
+      method === "POST"
+    ) {
+      parsed("Confirm");
+      return s.change(pp, body.revision, (d) => {
+        check(body.confirmed && d.planningTree, "기획을 확인해주세요.");
+        const n = d.planningTree.nodes.find((n: Doc) => n.id === parts[4]);
+        check(n, "가지가 없습니다.", 404);
+        n.status = "ready";
+      });
+    }
+    if (
+      parts[2] === "tree" &&
+      parts[3] === "nodes" &&
+      parts[5] === "expand" &&
+      parts.length === 6 &&
+      method === "POST"
+    )
+      return proposeTree(s, p, parts[4], body);
+    if (
+      parts[2] === "tree" &&
+      parts[3] === "entities" &&
+      parts.length === 5 &&
+      method === "PUT"
+    )
+      return renameEntity(s, p, parts[4], body);
     if (action === "planning/apply" && method === "POST")
       return applyPlanning(s, p, body);
     if (
@@ -656,6 +707,7 @@ export async function handleApi(request: Request, s: Store): Promise<unknown> {
             422,
           );
           invalidate(d);
+          syncModuleTree(d, key, body.section);
           d.bible[key] = {
             ...body.section,
             needsReview: false,
@@ -690,6 +742,7 @@ export async function handleApi(request: Request, s: Store): Promise<unknown> {
             section: key,
             sectionTitle: modules[key],
             existing_section: p.bible[key] ?? null,
+            common_planning_tree: p.planningTree ?? null,
             planning_decisions: p.planningDecisions ?? [],
             character_names: p.characterNames ?? [],
             requirements: p.requirements,
@@ -713,6 +766,7 @@ export async function handleApi(request: Request, s: Store): Promise<unknown> {
         );
         return s.change(pp, body.revision, (d) => {
           invalidate(d);
+          syncModuleTree(d, key, result, true);
           d.bible[key] = { ...result, needsReview: false, run };
           d.status = "BIBLE_REVIEW";
         });
@@ -751,6 +805,7 @@ export async function handleApi(request: Request, s: Store): Promise<unknown> {
         {
           requirements: p.requirements,
           answers: p.answers,
+          common_planning_tree: p.planningTree ?? null,
           planning_decisions: p.planningDecisions ?? [],
           character_names: p.characterNames ?? [],
           bible: p.bible,
@@ -805,6 +860,20 @@ export async function handleApi(request: Request, s: Store): Promise<unknown> {
         "필수 질문에 답변하세요.",
       );
       check(!p.analysis.conflicts.length, "원문 분석 충돌을 해소하세요.");
+      if (p.planningTree) {
+        check(
+          p.planningTree.foundationReady,
+          "공통 기획의 큰 틀을 먼저 만들어주세요.",
+        );
+        check(
+          !p.planningTree.issues.some((i: Doc) => i.status === "open"),
+          "공통 기획 트리의 미정·충돌을 해결해주세요.",
+        );
+        check(
+          !p.planningTree.nodes.some((n: Doc) => n.status === "needsReview"),
+          "연결 변경의 영향을 검토해주세요.",
+        );
+      }
       check(
         p.bibleAudit?.inputHash === (await bibleHash(p)),
         "최신 기획서에 대한 독립 교차 검토를 실행하세요.",
@@ -865,6 +934,7 @@ export async function handleApi(request: Request, s: Store): Promise<unknown> {
         "plot",
         {
           approved_bible: p.bible,
+          common_planning_tree: p.planningTree ?? null,
           planning_decisions: p.planningDecisions ?? [],
           character_names: p.characterNames ?? [],
           approved_style: p.styleBinding.snapshot,
@@ -1082,6 +1152,7 @@ export async function handleApi(request: Request, s: Store): Promise<unknown> {
         {
           content: ch.content,
           approved_bible: p.bible,
+          common_planning_tree: p.planningTree ?? null,
           planning_decisions: p.planningDecisions ?? [],
           character_names: p.characterNames ?? [],
           style_bible: p.styleBinding.snapshot,

@@ -886,3 +886,198 @@ test("truncated paid response settles its known charge instead of keeping the ma
     globalThis.fetch = originalFetch;
   }
 });
+
+test("common tree foundation, linked refinement, stable issue resolution and shared rename persist atomically", async () => {
+  const s = store(),
+    originalFetch = globalThis.fetch,
+    pid = "tree-flow";
+  const sec = {
+    ...structuredClone(fixtures.section),
+    requirementIds: ["R001"],
+    openQuestions: ["주인공의 본명과 빙의 전 신분은?"],
+    conflicts: [],
+  };
+  let p = await s.create("projects/" + pid, {
+    title: "공통 기획 작품",
+    genre: "판타지",
+    analysis: fixtures.analysis,
+    brief: { text: "원문 조건을 보존한다." },
+    requirements: [{ id: "R001", text: "원문 조건을 보존한다." }],
+    answers: {},
+    bible: { characters: sec },
+    status: "BIBLE_REVIEW",
+    canonVersion: 0,
+  });
+  const tree: any = await handleApi(req(`/projects/${pid}/tree`), s);
+  assert.equal(tree.foundationReady, false);
+  assert.equal(p.planningTree, undefined);
+  await assert.rejects(
+    handleApi(
+      req(`/projects/${pid}/tree/nodes/characters/expand`, {
+        revision: 1,
+        consent: true,
+        maxCostUsd: 1,
+      }),
+      s,
+    ),
+    (e: any) => e.status === 409,
+  );
+  let nextResult: any = {
+    summary: "세계관과 인물, 스토리의 중심 갈등을 함께 연결했습니다.",
+    nodes: tree.nodes
+      .filter((n: any) => !n.id.startsWith("module-"))
+      .map(({ status, ...n }: any) => ({
+        ...n,
+        content:
+          n.content + " {{entity:person_main}}는 세계의 제약을 넘어 선택한다.",
+        entityIds: ["person_main"],
+        requirementIds: ["R001"],
+      })),
+    entities: [
+      {
+        id: "person_main",
+        kind: "person",
+        name: "서도윤",
+        role: "주인공",
+        aliases: [],
+        description: "빙의 이전 도시의 기록관에서 시민 기록을 관리했다.",
+        nodeIds: ["characters", "story"],
+      },
+    ],
+    issues: [],
+  };
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls++;
+    return Response.json({
+      id: "tree-fixture",
+      choices: [
+        {
+          finish_reason: "stop",
+          message: { content: JSON.stringify(nextResult) },
+        },
+      ],
+      usage: { cost: 0 },
+    });
+  };
+  try {
+    const u = await s.get("account");
+    await s.change("account", u.revision, (d) => {
+      d.rate = {};
+    });
+    const proposal: any = await handleApi(
+      req(`/projects/${pid}/tree/foundation`, {
+        revision: 1,
+        consent: true,
+        maxCostUsd: 1,
+      }),
+      s,
+    );
+    assert.equal((await s.get("projects/" + pid)).planningTree, undefined);
+    p = (await handleApi(
+      req(`/projects/${pid}/tree/apply`, {
+        revision: 1,
+        proposalId: proposal.id,
+        confirmed: true,
+      }),
+      s,
+    )) as any;
+    assert(p.planningTree.foundationReady);
+    assert.deepEqual(p.bible.characters.content, sec.content);
+    assert.equal(p.planningTree.issues[0].status, "open");
+    p = (await handleApi(
+      req(
+        `/projects/${pid}/tree/entities/person_main`,
+        { revision: p.revision, name: "윤서진" },
+        "PUT",
+      ),
+      s,
+    )) as any;
+    assert.equal(calls, 1);
+    assert.equal(p.characterNames[0].name, "윤서진");
+    assert.equal(p.planningTree.entities[0].id, "person_main");
+    const legacy = p.planningTree.nodes.find(
+        (n: any) => n.id === "module-characters",
+      ),
+      issue = p.planningTree.issues[0];
+    const { status, updatedAt, ...node } = legacy;
+    nextResult = {
+      summary: "이름과 빙의 전 정체를 상세 인물 기획과 연결했습니다.",
+      nodes: [
+        {
+          ...node,
+          content:
+            "{{entity:person_main}}는 빙의 전 도시 기록관으로 일했으며 기록 지식으로 첫 사건을 해결한다.",
+          entityIds: ["person_main"],
+        },
+        {
+          id: "person-background",
+          parentId: node.id,
+          kind: "detail",
+          title: "빙의 전 배경",
+          content:
+            "{{entity:person_main}}는 기록관의 자료를 정리하면서 세계의 금기를 알게 되었다.",
+          entityIds: ["person_main"],
+          requirementIds: ["R001"],
+          dependsOn: ["world"],
+        },
+      ],
+      entities: [],
+      issues: [
+        {
+          id: issue.id,
+          title: "새 표현으로 다듬은 주인공 정체",
+          detail: "이름과 직업을 함께 정리합니다.",
+          nodeIds: [node.id],
+          entityIds: ["person_main"],
+          status: "resolved",
+          resolution:
+            "윤서진은 기록관 출신이며 지식이 첫 사건의 해결 원인이 되도록 연결했다.",
+        },
+      ],
+    };
+    const expanded: any = await handleApi(
+      req(`/projects/${pid}/tree/nodes/${node.id}/expand`, {
+        revision: p.revision,
+        issueId: issue.id,
+        consent: true,
+        maxCostUsd: 1,
+      }),
+      s,
+    );
+    const previousRevision = p.revision;
+    p = (await handleApi(
+      req(`/projects/${pid}/tree/apply`, {
+        revision: p.revision,
+        proposalId: expanded.id,
+        confirmed: true,
+      }),
+      s,
+    )) as any;
+    assert.equal(p.planningTree.issues[0].id, issue.id);
+    assert.equal(p.planningTree.issues[0].status, "resolved");
+    assert.equal(p.bible.characters.openQuestions.length, 0);
+    assert(p.bible.characters.content.includes("윤서진"));
+    assert.equal(p.brief.text, "원문 조건을 보존한다.");
+    assert.equal((await s.list(`projects/${pid}/tree_history`)).length, 3);
+    await assert.rejects(
+      handleApi(
+        req(
+          `/projects/${pid}/tree/entities/person_main`,
+          { revision: previousRevision, name: "낡은 이름" },
+          "PUT",
+        ),
+        s,
+      ),
+      (e: any) => e.status === 409,
+    );
+    assert.equal(calls, 2);
+    assert.equal(
+      ((await handleApi(req(`/projects/${pid}/tree/history`), s)) as any[])
+        .length,
+      3,
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

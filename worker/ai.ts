@@ -24,6 +24,8 @@ export const ROLES = [
 const schemas: Record<string, string> = {
   bible_audit: "BibleAudit",
   auto_plan: "PlanningProposal",
+  tree_foundation: "TreePatch",
+  tree_expand: "TreePatch",
   style_interview: "Analysis",
   analysis: "Analysis",
   section: "BibleSection",
@@ -35,6 +37,8 @@ const schemas: Record<string, string> = {
 const templates: Record<string, string> = {
   bible_audit: "BIBLE_CROSS_REVIEW",
   auto_plan: "AUTO_PLANNER",
+  tree_foundation: "TREE_FOUNDATION",
+  tree_expand: "TREE_EXPAND",
   style_interview: "STYLE_INTERVIEW",
   analysis: "PROFILE_INTERVIEW_GENERATOR",
   section: "STORY_BIBLE_DESIGNER",
@@ -47,6 +51,8 @@ const templates: Record<string, string> = {
 const roles: Record<string, string> = {
   bible_audit: "review",
   auto_plan: "planning",
+  tree_foundation: "planning",
+  tree_expand: "planning",
   style_interview: "style",
   analysis: "questions",
   section: "planning",
@@ -131,6 +137,12 @@ export async function generate(
   if (task === "style")
     system +=
       "\n참고 문구/고유인물/사건을 복제하지 마라. 13개 문체 규칙을 포함하고 A/B/C는 동일한 중립 사건으로 쓰라.";
+  if (input.common_planning_tree?.foundationReady)
+    system +=
+      "\n공통 기획 트리와 엔티티 등록부의 확정된 이름·설정·결정을 기준으로 서로 연결된 상세 문서를 작성하라. {{entity:ID}} 참조는 등록부 이름으로 해석하라. 기존 문서에 오래된 이름이나 미정이 남아 있으면 최신 공통 기획과 해결 이력에 맞춰 정리하라. 원문 요구는 보존하라.";
+  if (task === "bible_audit")
+    system +=
+      "\nfindings.section에는 concept, protagonist, characters, relationships, world, narrative, fun, density, style, special, serial 중 실제 관련 문서 키를 사용하고 트리 노드 ID는 evidence에 기록하라.";
   if (schemas[task])
     system +=
       "\n이 JSON Schema를 만족하는 JSON 객체만 출력하라:\n" +

@@ -49,6 +49,8 @@ export function tokenPlan(
     plot: [3072, 12288],
     bible_audit: [4096, 8192],
     auto_plan: [3072, 24576],
+    tree_foundation: [3072, 16384],
+    tree_expand: [2048, 12288],
     review: [4096, 8192],
     write: [2048, Math.max(8192, chars * 3)],
     rewrite: [1024, Math.max(4096, chars * 3)],
@@ -105,6 +107,49 @@ export function compactSchema(schema: Doc): Doc {
 }
 export function efficientInput(task: string, input: Doc): Doc {
   const data = structuredClone(input);
+  const pick = (value: Doc, keys: string[]) =>
+    Object.fromEntries(
+      keys.filter((k) => value[k] !== undefined).map((k) => [k, value[k]]),
+    );
+  const nodeKeys = [
+    "id",
+    "parentId",
+    "kind",
+    "title",
+    "content",
+    "entityIds",
+    "requirementIds",
+    "dependsOn",
+  ];
+  const issueKeys = [
+    "id",
+    "title",
+    "detail",
+    "nodeIds",
+    "entityIds",
+    "status",
+    "resolution",
+  ];
+  for (const key of ["tree", "common_planning_tree"])
+    if (data[key]) {
+      data[key].nodes = data[key].nodes.map((n: Doc) => pick(n, nodeKeys));
+      data[key].entities = data[key].entities.map((e: Doc) =>
+        pick(e, [
+          "id",
+          "kind",
+          "name",
+          "role",
+          "aliases",
+          "description",
+          "nodeIds",
+        ]),
+      );
+      data[key].issues = data[key].issues.map((i: Doc) => pick(i, issueKeys));
+    }
+  if (data.selected_node)
+    data.selected_node = pick(data.selected_node, nodeKeys);
+  if (data.focus_issue) data.focus_issue = pick(data.focus_issue, issueKeys);
+
   if (
     task === "analysis" &&
     typeof data.raw_brief === "string" &&

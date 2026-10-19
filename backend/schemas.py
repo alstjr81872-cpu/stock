@@ -271,3 +271,49 @@ class PlanningProposal(Strict):
 
 class ApplyPlanning(Confirm):
     proposalId: str
+
+
+class TreeNode(Strict):
+    id: str = Field(pattern=r'^[A-Za-z0-9_-]{1,80}$')
+    parentId: str | None
+    kind: Literal['root', 'branch', 'detail']
+    title: str = Field(min_length=1, max_length=120)
+    content: str = Field(min_length=10, max_length=15000)
+    entityIds: list[str] = Field(default_factory=list)
+    requirementIds: list[str] = Field(default_factory=list)
+    dependsOn: list[str] = Field(default_factory=list)
+
+
+class TreeEntity(Strict):
+    id: str = Field(pattern=r'^[A-Za-z0-9_-]{1,80}$')
+    kind: Literal['person', 'place', 'faction', 'rule']
+    name: str = Field(min_length=1, max_length=100)
+    role: str = Field(default='', max_length=150)
+    aliases: list[str] = Field(default_factory=list)
+    description: str = Field(min_length=10, max_length=5000)
+    nodeIds: list[str] = Field(default_factory=list)
+
+
+class TreeIssue(Strict):
+    id: str = Field(pattern=r'^[A-Za-z0-9_-]{1,80}$')
+    title: str = Field(min_length=1, max_length=300)
+    detail: str = Field(min_length=1, max_length=5000)
+    nodeIds: list[str] = Field(min_length=1)
+    entityIds: list[str] = Field(default_factory=list)
+    status: Literal['open', 'resolved'] = 'open'
+    resolution: str = Field(default='', max_length=5000)
+
+
+class TreePatch(Strict):
+    summary: str = Field(min_length=10, max_length=5000)
+    nodes: list[TreeNode] = Field(min_length=1, max_length=20)
+    entities: list[TreeEntity] = Field(default_factory=list, max_length=30)
+    issues: list[TreeIssue] = Field(default_factory=list, max_length=50)
+
+
+class TreeRequest(AIRequest):
+    issueId: str | None = None
+
+
+class RenameEntity(Revision):
+    name: str = Field(min_length=1, max_length=100)
