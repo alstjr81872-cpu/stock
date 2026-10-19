@@ -506,7 +506,7 @@ export default function Workspace() {
               </span>
             </div>
           </header>
-          {me && me.mode !== "production" && (
+          {me && ["emulator", "test-adapter"].includes(me.mode) && (
             <div className="emulator-bar">
               <span />
               {me.mode === "test-adapter"

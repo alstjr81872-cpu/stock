@@ -1,6 +1,6 @@
 import { Store } from "./store";
 import { type Doc, now, id, bytes, requireThat, HttpError } from "./shared";
-import { validate } from "./validation";
+import { modelResult, upstreamError } from "./model-response";
 import assets from "./assets.json";
 export const ROLES = [
   "questions",
@@ -228,36 +228,25 @@ export async function generate(
       }),
       signal: AbortSignal.timeout(180000),
     });
-    requireThat(
-      res.ok,
-      `OpenRouter 요청 실패 (${res.status}). 자동 재요청하지 않았습니다. 작업: ${requestId}`,
-      502,
-    );
-    const data = (await res.json()) as Doc;
-    requireThat(
-      data.choices?.[0]?.finish_reason === "stop",
-      "모델 응답이 완성되지 않았습니다.",
-      422,
-    );
-    let result = data.choices[0].message.content;
-    if (schemas[task])
-      result = validate(
-        schemas[task],
-        JSON.parse(
-          result
-            .trim()
-            .replace(/^```(?:json)?\s*/, "")
-            .replace(/```\s*$/, ""),
-        ),
+    if (!res.ok) throw upstreamError(res.status, task, requestId);
+    let data: Doc;
+    try {
+      data = (await res.json()) as Doc;
+    } catch {
+      throw new HttpError(
+        502,
+        "모델 제공자의 응답을 JSON으로 읽을 수 없습니다.",
       );
-    else {
-      requireThat(
-        typeof result === "string" && result.trim().length >= 20,
-        "원고 응답이 비어 있습니다.",
-        422,
-      );
-      result = result.trim();
     }
+    if (data?.error) {
+      const code = Number(data.error.code);
+      throw upstreamError(
+        Number.isInteger(code) && code >= 400 && code <= 599 ? code : 502,
+        task,
+        requestId,
+      );
+    }
+    const result = modelResult(data, schemas[task]);
     if (
       typeof data.usage?.cost === "number" &&
       Number.isFinite(data.usage.cost) &&
@@ -308,14 +297,25 @@ export async function generate(
       },
     };
   } catch (e) {
+    const failure =
+      e instanceof HttpError
+        ? new HttpError(
+            e.status,
+            `${e.message}${e.message.includes(requestId) ? "" : ` 자동 재요청하지 않았습니다. 작업: ${requestId}`}`,
+          )
+        : new HttpError(
+            502,
+            `모델 응답을 받거나 저장하지 못했습니다. 자동 재요청하지 않았습니다. 작업: ${requestId}`,
+          );
+
     if (!resultSaved)
       try {
         await s.change(jobPath, 1, (d) =>
           Object.assign(d, {
             status: "FAILED",
             checkpoint: submitted ? "uncertain" : "failed",
-            error:
-              "응답 미확정. 자동 재시도하지 않음. 작업 및 사용량 기록을 확인하세요.",
+            error: failure.message,
+            errorStatus: failure.status,
           }),
         );
       } catch {}
@@ -327,10 +327,6 @@ export async function generate(
           d.status = submitted ? "UNCERTAIN" : "FAILED";
         });
     } catch {}
-    if (e instanceof HttpError) throw e;
-    throw new HttpError(
-      502,
-      `모델 응답을 검증하거나 저장하지 못했습니다. 자동 재요청하지 않았습니다. 작업: ${requestId}`,
-    );
+    throw failure;
   }
 }

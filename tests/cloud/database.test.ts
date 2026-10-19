@@ -564,3 +564,41 @@ test("ambiguous OpenRouter failure retains reservation and never retries", async
     globalThis.fetch = originalFetch;
   }
 });
+
+test("OpenRouter 402 remains a payment error and is saved without upstream secrets", async () => {
+  const s = store(),
+    originalFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls++;
+    return new Response("sensitive-provider-body", { status: 402 });
+  };
+  try {
+    const u = await s.get("account");
+    await s.change("account", u.revision, (d) => {
+      d.rate = {};
+    });
+    await assert.rejects(
+      generate(
+        s,
+        "analysis",
+        { brief: "요청 형식 확인" },
+        { consent: true, maxCostUsd: 1 },
+        { projectId: "payment-error" },
+      ),
+      (e: any) =>
+        e.status === 402 &&
+        e.message.includes("원문 분석") &&
+        !e.message.includes("sensitive-provider-body"),
+    );
+    assert.equal(calls, 1);
+    const job = (await s.list("jobs")).find(
+      (j) => j.scope?.projectId === "payment-error",
+    );
+    assert.equal(job?.errorStatus, 402);
+    assert(job?.error.includes("잔액"));
+    assert(!JSON.stringify(job).includes("sensitive-provider-body"));
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
