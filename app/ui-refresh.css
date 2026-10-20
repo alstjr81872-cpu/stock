@@ -1890,3 +1890,34 @@ pre {
     font-size: 25px;
   }
 }
+
+.series-planner {
+  margin: 22px 0;
+}
+.series-planner .button-row > label {
+  display: grid;
+  gap: 8px;
+  flex: 1 1 220px;
+  min-width: 0;
+  font-size: 15px;
+}
+.series-planner input,
+.series-planner select {
+  width: 100%;
+  min-width: 0;
+}
+.series-planner details {
+  margin-top: 18px;
+  padding: 16px;
+  border: 1px solid #383244;
+  border-radius: 12px;
+}
+.series-planner details p,
+.series-planner article p {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.8;
+}
+.series-planner .scene-grid {
+  margin-top: 20px;
+}

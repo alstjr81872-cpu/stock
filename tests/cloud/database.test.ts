@@ -1350,3 +1350,599 @@ test("tree approval proceeds with unfinished branches and no legacy modules or s
     globalThis.fetch = originalFetch;
   }
 });
+
+test("automatic plot development quotes once, previews without mutation and applies with CAS and preserved continuation notes", async () => {
+  const s = store(),
+    pid = "plot-develop",
+    originalFetch = globalThis.fetch;
+  const oldPlot = {
+    ...structuredClone(fixtures.plot),
+    status: "REVIEW",
+    version: 1,
+    canonVersion: 1,
+    risks: ["장면의 행동 동기가 부족하다."],
+    openQuestions: ["후반 결말은?"],
+    continuationNotes: ["기존 장기 메모"],
+  };
+  let p = await s.create(`projects/${pid}`, {
+    title: "자동 전개 작품",
+    status: "ACTIVE",
+    canonVersion: 1,
+    planningMode: "tree",
+    requirements: [],
+    answers: {},
+    bible: {},
+    plot: oldPlot,
+    styleBinding: {
+      pinnedVersion: 1,
+      snapshot: { name: "기획의 문체", rules: {} },
+    },
+  });
+  const account = await s.get("account");
+  await s.change("account", account.revision, (d) => {
+    d.rate = {};
+  });
+  const developed = structuredClone(fixtures.plot);
+  developed.scenes[0].action = "잃어버린 기록을 돌려주기 위해 약속을 선택한다.";
+  const result = {
+    summary:
+      "장면의 행동 동기를 정하고 후반 결말은 이후 전개의 메모로 남깁니다.",
+    plot: developed,
+    decisions: [
+      {
+        issueId: "risk-0",
+        disposition: "resolved",
+        resolution:
+          "기록을 돌려주려는 구체적인 행동 동기를 첫 장면에 반영했다.",
+      },
+      {
+        issueId: "question-0",
+        disposition: "later",
+        resolution:
+          "후반 결말은 첫 회차에 필요하지 않아 이후 아크를 설계할 때 구체화한다.",
+      },
+    ],
+  };
+  let paid = 0;
+  globalThis.fetch = async () => {
+    paid++;
+    return Response.json({
+      choices: [
+        { finish_reason: "stop", message: { content: JSON.stringify(result) } },
+      ],
+      usage: { cost: 0 },
+    });
+  };
+  try {
+    await assert.rejects(
+      handleApi(
+        req(`/projects/${pid}/plot/develop`, {
+          revision: p.revision,
+          consent: false,
+          maxCostUsd: 5,
+        }),
+        new Store(env, uid, transport, true),
+      ),
+      (e: any) => e instanceof QuoteReady,
+    );
+    assert.equal(paid, 0);
+    const proposal: any = await handleApi(
+      req(`/projects/${pid}/plot/develop`, {
+        revision: p.revision,
+        consent: true,
+        maxCostUsd: 1,
+      }),
+      s,
+    );
+    assert.equal(paid, 1);
+    assert.deepEqual((await s.get(`projects/${pid}`)).plot, oldPlot);
+    await assert.rejects(
+      handleApi(
+        req(`/projects/${pid}/plot/develop/apply`, {
+          revision: p.revision + 1,
+          confirmed: true,
+          proposalId: proposal.id,
+        }),
+        s,
+      ),
+      (e: any) => e.status === 409,
+    );
+    p = (await handleApi(
+      req(`/projects/${pid}/plot/develop/apply`, {
+        revision: p.revision,
+        confirmed: true,
+        proposalId: proposal.id,
+      }),
+      s,
+    )) as any;
+    assert.equal(paid, 1);
+    assert.equal(p.plot.status, "REVIEW");
+    assert.equal(p.plot.version, 2);
+    assert.equal(p.plot.risks.length, 0);
+    assert.equal(p.plot.openQuestions.length, 0);
+    assert(p.plot.continuationNotes.includes("기존 장기 메모"));
+    assert(
+      p.plot.continuationNotes.some((n: string) => n.includes("후반 결말")),
+    );
+    const history = await s.list(`projects/${pid}/plot_history`);
+    assert.deepEqual(history[0].beforePlot, oldPlot);
+    await assert.rejects(
+      handleApi(
+        req(`/projects/${pid}/plot/develop/apply`, {
+          revision: p.revision,
+          confirmed: true,
+          proposalId: proposal.id,
+        }),
+        s,
+      ),
+      (e: any) => e.status === 409,
+    );
+    p = (await handleApi(
+      req(`/projects/${pid}/plot/approve`, {
+        revision: p.revision,
+        confirmed: true,
+      }),
+      s,
+    )) as any;
+    const compiled: any = await handleApi(req(`/projects/${pid}/prompt/s1`), s);
+    assert(
+      compiled.layers.L3.plot_continuation_notes.some((n: string) =>
+        n.includes("후반 결말"),
+      ),
+    );
+    await assert.rejects(
+      handleApi(
+        req(`/projects/${pid}/plot/develop`, {
+          revision: p.revision,
+          consent: true,
+          maxCostUsd: 1,
+        }),
+        s,
+      ),
+      (e: any) => e.status === 409,
+    );
+    assert.equal(paid, 1);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("automatic development checks missing details first and carries the saved check into the second paid stage", async () => {
+  const s = store(),
+    pid = "plot-gap-stages",
+    originalFetch = globalThis.fetch;
+  let p = await s.create(`projects/${pid}`, {
+    title: "단계별 자동 전개",
+    status: "ACTIVE",
+    canonVersion: 1,
+    planningMode: "tree",
+    requirements: [],
+    answers: {},
+    bible: {},
+    plot: { ...structuredClone(fixtures.plot), status: "REVIEW", version: 1 },
+    styleBinding: {
+      pinnedVersion: 1,
+      snapshot: { name: "기획 문체", rules: {} },
+    },
+  });
+  const account = await s.get("account");
+  await s.change("account", account.revision, (d) => {
+    d.rate = {};
+  });
+  let paid = 0;
+  let output: any = {
+    summary: "두 장면 사이의 시간 경과가 모호한 부분을 발견했습니다.",
+    gaps: [
+      {
+        id: "gap-time",
+        title: "장면 사이 시간",
+        detail: "첫 만남에서 다음 행동으로 넘어가는 시간 경과를 결정해야 한다.",
+        scope: "current",
+      },
+    ],
+  };
+  globalThis.fetch = async () => {
+    paid++;
+    return Response.json({
+      choices: [
+        { finish_reason: "stop", message: { content: JSON.stringify(output) } },
+      ],
+      usage: { cost: 0 },
+    });
+  };
+  try {
+    const path = `/projects/${pid}/plot/develop`;
+    await assert.rejects(
+      handleApi(
+        req(path + "/check", {
+          revision: p.revision,
+          consent: false,
+          maxCostUsd: 5,
+        }),
+        new Store(env, uid, transport, true),
+      ),
+      (e: any) => e instanceof QuoteReady,
+    );
+    assert.equal(paid, 0);
+    const audit: any = await handleApi(
+      req(path + "/check", {
+        revision: p.revision,
+        consent: true,
+        maxCostUsd: 1,
+      }),
+      s,
+    );
+    assert.equal(paid, 1);
+    assert.equal((await s.get(`projects/${pid}`)).revision, p.revision);
+    const developed = structuredClone(fixtures.plot);
+    developed.scenes[1].startState = "같은 날 오후, 첫 장면의 약속을 돌아본다.";
+    output = {
+      summary: "발견한 시간의 공백을 채워 두 장면의 인과를 연결했습니다.",
+      decisions: [
+        {
+          issueId: "gap-time",
+          disposition: "resolved",
+          resolution:
+            "같은 날 오후로 시간을 정해 첫 장면과 두 번째 장면을 연결했다.",
+        },
+      ],
+      plot: developed,
+    };
+    await assert.rejects(
+      handleApi(
+        req(path, {
+          revision: p.revision,
+          auditId: audit.id,
+          consent: false,
+          maxCostUsd: 5,
+        }),
+        new Store(env, uid, transport, true),
+      ),
+      (e: any) => e instanceof QuoteReady,
+    );
+    assert.equal(paid, 1);
+    const proposal: any = await handleApi(
+      req(path, {
+        revision: p.revision,
+        auditId: audit.id,
+        consent: true,
+        maxCostUsd: 1,
+      }),
+      s,
+    );
+    assert.equal(proposal.auditId, audit.id);
+    assert.equal(paid, 2);
+    p = (await handleApi(
+      req(path + "/apply", {
+        revision: p.revision,
+        proposalId: proposal.id,
+        confirmed: true,
+      }),
+      s,
+    )) as any;
+    assert(p.plot.scenes[1].startState.includes("같은 날 오후"));
+    assert.equal(
+      (await s.list(`projects/${pid}/plot_history`))[0].auditId,
+      audit.id,
+    );
+    await assert.rejects(
+      handleApi(
+        req(path, {
+          revision: p.revision,
+          auditId: audit.id,
+          consent: true,
+          maxCostUsd: 1,
+        }),
+        s,
+      ),
+      (e: any) => e.status === 409,
+    );
+    assert.equal(paid, 2);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("ten-episode synopsis records drive separate chapter drafts, length and continuation from episode eleven", async () => {
+  const s = store(),
+    pid = "serial-ten",
+    originalFetch = globalThis.fetch;
+  let p = await s.create(`projects/${pid}`, {
+    title: "연재 테스트",
+    status: "ACTIVE",
+    planningMode: "tree",
+    canonVersion: 1,
+    requirements: [],
+    answers: {},
+    bible: {},
+    styleBinding: { pinnedVersion: 1, snapshot: { name: "문체", rules: {} } },
+  });
+  const account = await s.get("account");
+  await s.change("account", account.revision, (d) => {
+    d.rate = {};
+  });
+  const batch = (start: number) => ({
+    summary: `${start}화부터 이어지는 열 회차의 사건과 인물 변화를 연결한 시놉시스입니다.`,
+    episodes: Array.from({ length: 10 }, (_, i) => ({
+      number: start + i,
+      title: `${start + i}화 기록의 약속`,
+      synopsis:
+        "사라진 기록을 찾는 인물이 동료에게 약속을 건네고, 약속을 지키는 선택의 결과로 다음 사건의 단서를 얻는다. 작은 손해와 성과를 함께 누적한다.",
+      characterChange: "서로를 경계하던 인물들이 작은 약속으로 신뢰를 쌓는다.",
+      endingHook: "되찾은 기록의 마지막 줄에서 다음 사건의 단서가 드러난다.",
+    })),
+  });
+  let output: any = batch(1),
+    paid = 0,
+    lastInput = "";
+  globalThis.fetch = async (_url, init) => {
+    paid++;
+    lastInput = String(init!.body);
+    return Response.json({
+      choices: [
+        {
+          finish_reason: "stop",
+          message: {
+            content:
+              typeof output === "string" ? output : JSON.stringify(output),
+          },
+        },
+      ],
+      usage: { cost: 0 },
+    });
+  };
+  const request = (
+    path: string,
+    body?: any,
+    method?: string,
+    episode?: number,
+  ) =>
+    req(
+      `/projects/${pid}${path}${episode ? `?episode=${episode}` : ""}`,
+      body,
+      method,
+    );
+  try {
+    await assert.rejects(
+      handleApi(
+        request("/synopsis/generate", {
+          revision: p.revision,
+          consent: false,
+          maxCostUsd: 5,
+        }),
+        new Store(env, uid, transport, true),
+      ),
+      (e: any) => e instanceof QuoteReady,
+    );
+    assert.equal(paid, 0);
+    const proposed: any = await handleApi(
+      request("/synopsis/generate", {
+        revision: p.revision,
+        consent: true,
+        maxCostUsd: 1,
+      }),
+      s,
+    );
+    assert.equal((await s.get(`projects/${pid}`)).episodeSynopsis, undefined);
+    p = (await handleApi(
+      request("/synopsis/apply", {
+        revision: p.revision,
+        proposalId: proposed.id,
+        confirmed: true,
+      }),
+      s,
+    )) as any;
+    assert.equal(p.episodeSynopsis.number, 1);
+    assert.equal(p.synopsisThrough, 10);
+    const state: any = await handleApi(request("/synopsis"), s);
+    assert.equal(state.batches[0].result.episodes.length, 10);
+    assert.equal(state.canExtend, false);
+    await assert.rejects(
+      handleApi(
+        request("/synopsis/generate", {
+          revision: p.revision,
+          consent: true,
+          maxCostUsd: 1,
+        }),
+        s,
+      ),
+      (e: any) => e.status === 409,
+    );
+    p = (await handleApi(
+      request(
+        "/writing-settings",
+        { revision: p.revision, targetChars: 6000 },
+        "PUT",
+      ),
+      s,
+    )) as any;
+    output = fixtures.plot;
+    p = (await handleApi(
+      request("/plot/generate", {
+        revision: p.revision,
+        consent: true,
+        maxCostUsd: 1,
+      }),
+      s,
+    )) as any;
+    assert(lastInput.includes("1화 기록의 약속"));
+    assert.equal(
+      p.plot.scenes.reduce((n: number, sc: any) => n + sc.targetChars, 0),
+      6000,
+    );
+    p = (await handleApi(
+      request("/plot/approve", { revision: p.revision, confirmed: true }),
+      s,
+    )) as any;
+    const prompt: any = await handleApi(
+      request("/prompt/s1", undefined, "GET", 1),
+      s,
+    );
+    assert.equal(prompt.layers.L3.episode_synopsis.number, 1);
+    assert.equal(prompt.layers.L4.targetChars, 3000);
+    output = fixtures.write;
+    let ch: any = await handleApi(
+      request(
+        "/scenes/s1/write",
+        { revision: p.revision, consent: true, maxCostUsd: 1 },
+        "POST",
+        1,
+      ),
+      s,
+    );
+    ch = await handleApi(
+      request(
+        "/scenes/s2/write",
+        { revision: p.revision, consent: true, maxCostUsd: 1 },
+        "POST",
+        1,
+      ),
+      s,
+    );
+    output = {
+      findings: [],
+      strengths: ["인과가 이어진다."],
+      summary: "약속을 지키기 위해 작은 손해를 감수하고 기록을 되찾았다.",
+      requiresHuman: false,
+    };
+    ch = await handleApi(
+      request(
+        "/chapter/review",
+        { revision: ch.revision, consent: true, maxCostUsd: 1 },
+        "POST",
+        1,
+      ),
+      s,
+    );
+    ch = await handleApi(
+      request(
+        "/chapter/approve",
+        { revision: ch.revision, confirmed: true, reviewed: true },
+        "POST",
+        1,
+      ),
+      s,
+    );
+    const firstContent = ch.content;
+    p = await s.get(`projects/${pid}`);
+    p = (await handleApi(
+      request("/episodes/select", { revision: p.revision, number: 2 }),
+      s,
+    )) as any;
+    assert.equal(p.episodeSynopsis.number, 2);
+    assert.equal(p.plot, null);
+    await assert.rejects(
+      handleApi(
+        request(
+          "/chapter",
+          {
+            revision: 1,
+            title: "잘못된 탭",
+            content: "다른 회차에 쓰면 안 된다.",
+          },
+          "PUT",
+          1,
+        ),
+        s,
+      ),
+      (e: any) => e.status === 409,
+    );
+    output = fixtures.plot;
+    p = (await handleApi(
+      request("/plot/generate", {
+        revision: p.revision,
+        consent: true,
+        maxCostUsd: 1,
+      }),
+      s,
+    )) as any;
+    assert(lastInput.includes("2화 기록의 약속"));
+    p = (await handleApi(
+      request("/plot/approve", { revision: p.revision, confirmed: true }),
+      s,
+    )) as any;
+    output = fixtures.write;
+    ch = await handleApi(
+      request(
+        "/scenes/s1/write",
+        { revision: p.revision, consent: true, maxCostUsd: 1 },
+        "POST",
+        2,
+      ),
+      s,
+    );
+    assert.equal(ch.id, "chapter-2");
+    assert.equal(ch.number, 2);
+    assert.equal(
+      (await s.get(`projects/${pid}/chapters/chapter-1`)).content,
+      firstContent,
+    );
+    assert(await s.get(`projects/${pid}/scenes/chapter-2-s1`));
+    assert.equal(
+      (
+        (await handleApi(
+          request("/chapter/versions", undefined, "GET", 2),
+          s,
+        )) as any[]
+      ).length,
+      0,
+    );
+    const v = (await s.list(`projects/${pid}/chapter_versions`))[0];
+    await assert.rejects(
+      handleApi(request(`/chapter/versions/${v.id}`, undefined, "GET", 2), s),
+      (e: any) => e.status === 404,
+    );
+    for (let n = 3; n <= 10; n++)
+      await s.create(`projects/${pid}/chapters/chapter-${n}`, {
+        id: `chapter-${n}`,
+        number: n,
+        status: "APPROVED",
+        title: `${n}화`,
+        content: "앞 회차의 약속을 이어 다음 사건을 해결했다.",
+        review: { summary: "이전 선택의 대가가 다음 단서를 열었다." },
+      });
+    p = await s.change(`projects/${pid}`, p.revision, (d) => {
+      d.completedEpisodes = Array.from({ length: 10 }, (_, i) => i + 1);
+      d.currentEpisode = 10;
+      d.episodeSynopsis = batch(1).episodes[9];
+    });
+    assert.equal(
+      ((await handleApi(request("/synopsis"), s)) as any).canExtend,
+      true,
+    );
+    output = batch(11);
+    const next: any = await handleApi(
+      request("/synopsis/generate", {
+        revision: p.revision,
+        consent: true,
+        maxCostUsd: 1,
+      }),
+      s,
+    );
+    assert(lastInput.includes("previous_batch"));
+    p = (await handleApi(
+      request("/synopsis/apply", {
+        revision: p.revision,
+        proposalId: next.id,
+        confirmed: true,
+      }),
+      s,
+    )) as any;
+    assert.equal(p.currentEpisode, 11);
+    assert.equal(p.episodeSynopsis.number, 11);
+    assert.equal(p.synopsisThrough, 20);
+    assert.equal(p.plot, null);
+    assert.equal(p.targetChars, 6000);
+    assert.equal(
+      (await s.get(`projects/${pid}/synopsis_batches/${proposed.id}`)).result
+        .episodes[0].number,
+      1,
+    );
+    assert.equal(
+      ((await handleApi(request("/synopsis"), s)) as any).batches.length,
+      2,
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

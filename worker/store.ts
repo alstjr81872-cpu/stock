@@ -232,6 +232,7 @@ export class Store {
       status: "COMMITTED",
       title: ch.title,
       revisionOfContent: ch.revision,
+      chapterId: ch.id ?? "chapter-1",
       charCount: ch.charCountWithSpaces,
     });
   }

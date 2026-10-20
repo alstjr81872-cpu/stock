@@ -1,0 +1,253 @@
+import { Store } from "./store";
+import {
+  type Doc,
+  revision,
+  active,
+  requireThat as check,
+  id,
+  now,
+} from "./shared";
+import { validate } from "./validation";
+import { generate } from "./ai";
+export const episodeNumber = (p: Doc) => p.currentEpisode ?? 1;
+export const chapterPath = (p: Doc) =>
+  `projects/${p.id}/chapters/chapter-${episodeNumber(p)}`;
+const done = (ch: Doc | null) =>
+  ch && ["APPROVED", "LOCKED"].includes(ch.status);
+
+export function fitLength(plot: Doc, target?: number): Doc {
+  if (!target) return plot;
+  const count = plot.scenes.length;
+  check(
+    target >= count * 200 && target <= count * 5000,
+    "설정한 분량에 맞는 장면 수가 필요합니다. 회차를 다시 설계하거나 자동 전개로 장면을 구체화해주세요.",
+    422,
+  );
+  return {
+    ...plot,
+    scenes: plot.scenes.map((scene: Doc, i: number) => ({
+      ...scene,
+      targetChars: Math.floor(target / count) + (i < target % count ? 1 : 0),
+    })),
+  };
+}
+export async function synopsisState(s: Store, p: Doc) {
+  const batches = (await s.list(`projects/${p.id}/synopsis_batches`))
+    .filter((b: Doc) => b.status === "APPLIED")
+    .sort((a: Doc, b: Doc) => a.start - b.start);
+  const end = batches.at(-1)?.end ?? 0;
+  const completed = p.completedEpisodes ?? [];
+  return {
+    batches,
+    currentEpisode: episodeNumber(p),
+    targetChars: p.targetChars ?? 5000,
+    completedEpisodes: completed,
+    nextStart: end + 1,
+    canExtend:
+      !end ||
+      Array.from({ length: 10 }, (_, i) => end - 9 + i).every((n) =>
+        completed.includes(n),
+      ),
+  };
+}
+export async function proposeSynopsis(s: Store, p: Doc, body: Doc) {
+  validate("AIRequest", body);
+  revision(p, body.revision);
+  active(p);
+  const state = await synopsisState(s, p),
+    start = state.nextStart,
+    end = start + 9;
+  check(
+    state.canExtend,
+    `${start - 1}화 원고를 확정한 뒤 다음 10화 시놉시스를 이어가세요.`,
+    409,
+  );
+  const recent = (await s.list(`projects/${p.id}/chapters`))
+    .filter((ch: Doc) => done(ch))
+    .sort((a: Doc, b: Doc) => (b.number ?? 1) - (a.number ?? 1))
+    .slice(0, 10)
+    .map((ch: Doc) => ({
+      number: ch.number ?? 1,
+      title: ch.title,
+      summary: ch.review?.summary ?? "",
+      tail: (ch.content ?? "").slice(-700),
+    }));
+  const { result, run } = await generate(
+    s,
+    "synopsis",
+    {
+      start,
+      end,
+      targetChars: p.defaultTargetChars ?? p.targetChars ?? 5000,
+      common_planning_tree: p.planningTree ?? null,
+      requirements: p.requirements,
+      answers: p.answers,
+      character_names: p.characterNames ?? [],
+      previous_batch: state.batches.at(-1)?.result ?? null,
+      completed_episodes: recent,
+      current_episode_plot: p.plot ?? null,
+    },
+    body,
+    { projectId: p.id, start, end },
+  );
+  check(
+    result.episodes.every((e: Doc, i: number) => e.number === start + i),
+    "시놉시스는 요청한 10개 회차를 번호 순서대로 모두 포함해야 합니다.",
+    422,
+  );
+  const key = id(),
+    op = s.prepare(`projects/${p.id}/synopsis_batches/${key}`, {
+      id: key,
+      start,
+      end,
+      status: "PROPOSED",
+      inputRevision: p.revision,
+      result,
+      run,
+      createdAt: now(),
+    });
+  await s.commit([
+    { path: `projects/${p.id}`, expected: p.revision, guard: true },
+    op,
+  ]);
+  return op.data;
+}
+export async function applySynopsis(s: Store, p: Doc, body: Doc) {
+  validate("ApplyPlanning", body);
+  revision(p, body.revision);
+  active(p);
+  check(
+    body.confirmed && /^[A-Za-z0-9_-]+$/.test(body.proposalId),
+    "시놉시스를 확인해주세요.",
+    422,
+  );
+  const path = `projects/${p.id}/synopsis_batches/${body.proposalId}`,
+    proposal = await s.get(path);
+  const state = await synopsisState(s, p);
+  check(
+    proposal.status === "PROPOSED" &&
+      proposal.inputRevision === p.revision &&
+      proposal.start === state.nextStart,
+    "시놉시스 제안 이후 기획이나 진행 상황이 변경되었습니다.",
+    409,
+  );
+  const next = structuredClone(p);
+  next.seriesEnabled = true;
+  next.targetChars ??=
+    p.plot?.scenes?.reduce(
+      (sum: number, scene: Doc) => sum + scene.targetChars,
+      0,
+    ) || 5000;
+  next.defaultTargetChars ??= next.targetChars;
+  next.currentEpisode ??= 1;
+  next.episodeSynopsis ??=
+    proposal.result.episodes.find(
+      (e: Doc) => e.number === next.currentEpisode,
+    ) ?? null;
+  next.synopsisThrough = proposal.end;
+  const extras = [];
+  if (
+    proposal.start > 1 &&
+    next.currentEpisode === proposal.start - 1 &&
+    (p.completedEpisodes ?? []).includes(proposal.start - 1)
+  ) {
+    const source = `projects/${p.id}/episode_plans/episode-${next.currentEpisode}`,
+      old = await s.find(source);
+    extras.push(
+      s.prepare(
+        source,
+        {
+          number: next.currentEpisode,
+          plot: p.plot ?? null,
+          targetChars: p.targetChars ?? 5000,
+        },
+        old?.revision ?? 0,
+      ),
+    );
+    next.currentEpisode = proposal.start;
+    next.episodeSynopsis = proposal.result.episodes[0];
+    next.plot = null;
+    next.targetChars = p.defaultTargetChars ?? 5000;
+  }
+  const op = s.prepare(`projects/${p.id}`, next, p.revision);
+  await s.commit([
+    op,
+    s.prepare(
+      path,
+      { ...proposal, status: "APPLIED", appliedAt: now() },
+      proposal.revision,
+    ),
+    ...extras,
+  ]);
+  return op.data;
+}
+export async function selectEpisode(s: Store, p: Doc, body: Doc) {
+  validate("SelectEpisode", body);
+  revision(p, body.revision);
+  active(p);
+  if (body.number === episodeNumber(p)) return p;
+  const state = await synopsisState(s, p);
+  const synopsis = state.batches
+    .flatMap((b: Doc) => b.result.episodes)
+    .find((e: Doc) => e.number === body.number);
+  check(synopsis, "먼저 해당 구간의 시놉시스를 만들어주세요.", 422);
+  const source = `projects/${p.id}/episode_plans/episode-${episodeNumber(p)}`;
+  const old = await s.find(source),
+    target = await s.find(
+      `projects/${p.id}/episode_plans/episode-${body.number}`,
+    );
+  const next = {
+    ...p,
+    currentEpisode: body.number,
+    episodeSynopsis: synopsis,
+    plot: target?.plot ?? null,
+    targetChars: target?.targetChars ?? p.defaultTargetChars ?? 5000,
+  };
+  if (
+    next.plot?.status === "APPROVED" &&
+    next.plot.canonVersion !== p.canonVersion
+  )
+    next.plot = { ...next.plot, status: "INVALIDATED" };
+  const op = s.prepare(`projects/${p.id}`, next, p.revision);
+  await s.commit([
+    op,
+    s.prepare(
+      source,
+      {
+        number: episodeNumber(p),
+        plot: p.plot ?? null,
+        targetChars: p.targetChars ?? 5000,
+      },
+      old?.revision ?? 0,
+    ),
+  ]);
+  return op.data;
+}
+export async function writingSettings(s: Store, p: Doc, body: Doc) {
+  validate("WritingSettings", body);
+  revision(p, body.revision);
+  active(p);
+  const ch = await s.find(chapterPath(p));
+  check(
+    !ch || !(ch.charCountWithSpaces > 0),
+    "이미 집필한 회차의 분량은 보존합니다. 다음 회차로 이동한 뒤 목표 분량을 설정해주세요.",
+    409,
+  );
+  return s.change(`projects/${p.id}`, body.revision, (d) => {
+    d.targetChars = body.targetChars;
+    d.defaultTargetChars = body.targetChars;
+    if (d.plot) d.plot.status = "INVALIDATED";
+    // Keep the existing scenes even when the new length needs more scenes.
+    if (d.plot && body.targetChars <= d.plot.scenes.length * 5000)
+      d.plot = fitLength(d.plot, body.targetChars);
+  });
+}
+export async function requirePreviousChapter(s: Store, p: Doc) {
+  const number = episodeNumber(p);
+  if (number > 1)
+    check(
+      done(await s.find(`projects/${p.id}/chapters/chapter-${number - 1}`)),
+      `${number - 1}화 원고를 확정한 뒤 다음 회차를 집필해주세요.`,
+      409,
+    );
+}

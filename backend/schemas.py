@@ -121,6 +121,56 @@ class Plot(Strict):
     scenes: list[Scene] = Field(min_length=2, max_length=6)
     risks: list[str]
     openQuestions: list[str]
+    continuationNotes: list[str] = Field(default_factory=list)
+
+
+class PlotDecision(Strict):
+    issueId: str
+    disposition: Literal['resolved', 'later', 'unresolved']
+    resolution: str = Field(min_length=10, max_length=3000)
+
+
+class PlotDevelopment(Strict):
+    summary: str = Field(min_length=10, max_length=3000)
+    decisions: list[PlotDecision] = Field(default_factory=list, max_length=100)
+    plot: Plot
+
+
+class PlotGap(Strict):
+    id: str = Field(pattern=r'^gap-[A-Za-z0-9_-]{1,60}$')
+    title: str = Field(min_length=1, max_length=200)
+    detail: str = Field(min_length=10, max_length=2000)
+    scope: Literal['current', 'later']
+
+
+class PlotGaps(Strict):
+    summary: str = Field(min_length=10, max_length=3000)
+    gaps: list[PlotGap] = Field(default_factory=list, max_length=12)
+
+
+class PlotDevelopRequest(AIRequest):
+    auditId: str | None = None
+
+
+class EpisodeSynopsis(Strict):
+    number: int = Field(ge=1)
+    title: str = Field(min_length=1, max_length=150)
+    synopsis: str = Field(min_length=40, max_length=3000)
+    characterChange: str = Field(min_length=10, max_length=1000)
+    endingHook: str = Field(min_length=10, max_length=1000)
+
+
+class SynopsisBatch(Strict):
+    summary: str = Field(min_length=10, max_length=3000)
+    episodes: list[EpisodeSynopsis] = Field(min_length=10, max_length=10)
+
+
+class SelectEpisode(Revision):
+    number: int = Field(ge=1, le=1000000)
+
+
+class WritingSettings(Revision):
+    targetChars: int = Field(ge=2000, le=20000)
 
 
 class Finding(Strict):

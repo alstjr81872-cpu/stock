@@ -20,9 +20,11 @@ import Editor from "./editor";
 export default function WritingRoom({
   project: p,
   reloadProject,
+  onNext,
 }: {
   project: any;
   reloadProject: () => Promise<void>;
+  onNext?: () => Promise<void>;
 }) {
   const { busy, run, askAI, notify, registerLeave } = useActions();
   const [ch, setCh] = useState<any>(null),
@@ -47,6 +49,8 @@ export default function WritingRoom({
     conflictRef = useRef(false),
     lastChange = useRef(0);
   const base = "/projects/" + p.id;
+  const episode = p.currentEpisode ?? 1;
+  const episodePath = (path: string) => base + path + "?episode=" + episode;
   function adopt(data: any) {
     chRef.current = data;
     textRef.current = data.content;
@@ -58,7 +62,7 @@ export default function WritingRoom({
   }
   useEffect(() => {
     let live = true;
-    api(base + "/chapter")
+    api(episodePath("/chapter"))
       .then((d) => {
         if (live) adopt(d);
       })
@@ -99,7 +103,7 @@ export default function WritingRoom({
     const operation = (async () => {
       try {
         const result = await send(
-          base + "/chapter",
+          episodePath("/chapter"),
           { revision: rev, content, title: chapterTitle },
           "PUT",
         );
@@ -109,11 +113,17 @@ export default function WritingRoom({
         return true;
       } catch (e) {
         if (e instanceof ApiError && e.status === 409) {
-          const current = await api(base + "/chapter");
           conflictRef.current = true;
-          setConflict(current);
-          setMerged(textRef.current);
-          setSaveState("충돌 감지 · 자동 저장 중지");
+          try {
+            const current = await api(episodePath("/chapter"));
+            setConflict(current);
+            setMerged(textRef.current);
+            setSaveState("충돌 감지 · 자동 저장 중지");
+          } catch {
+            setSaveState(
+              "저장 실패 · 선택 회차가 바뀌었거나 불러올 수 없습니다. 편집한 글을 복사해 보관하세요.",
+            );
+          }
         } else setSaveState("저장 실패 · " + (e as Error).message);
         return false;
       } finally {
@@ -152,11 +162,11 @@ export default function WritingRoom({
   async function aiAction(path: string, scope: string) {
     if (!(await flush())) return;
     const max = await askAI(scope, {
-      path: base + path,
+      path: episodePath(path),
       data: { revision: chRef.current.revision },
     });
     if (max === null) return;
-    const result = await send(base + path, {
+    const result = await send(episodePath(path), {
       revision: chRef.current.revision,
       consent: true,
       maxCostUsd: max,
@@ -191,6 +201,16 @@ export default function WritingRoom({
           {saveState}
         </span>
       </div>
+      {ch?.status === "APPROVED" && onNext && (
+        <div className="panel button-row">
+          <p>제{episode}화 원고를 확정했습니다.</p>
+          <Button disabled={busy} onClick={() => run(onNext)}>
+            {episode >= (p.synopsisThrough ?? 0)
+              ? "다음 10화 시놉시스"
+              : `${episode + 1}화로 이어가기`}
+          </Button>
+        </div>
+      )}
       {!complete && (
         <div className="info-note">
           <ShieldCheck size={17} />
@@ -213,13 +233,15 @@ export default function WritingRoom({
                 const max = await askAI(
                   "첫 장면의 승인된 플롯·문체·기획과 공통 집필 규칙을 전송해 원고 초안을 생성합니다.",
                   {
-                    path: base + "/scenes/" + p.plot.scenes[0].id + "/write",
+                    path: episodePath(
+                      "/scenes/" + p.plot.scenes[0].id + "/write",
+                    ),
                     data: { revision: p.revision },
                   },
                 );
                 if (max === null) return;
                 const data = await send(
-                  base + "/scenes/" + p.plot.scenes[0].id + "/write",
+                  episodePath("/scenes/" + p.plot.scenes[0].id + "/write"),
                   { revision: p.revision, consent: true, maxCostUsd: max },
                 );
                 adopt(data);
@@ -237,7 +259,9 @@ export default function WritingRoom({
               <Badge tone={ch.status === "APPROVED" ? "green" : "purple"}>
                 {statuses[ch.status] || ch.status}
               </Badge>
-              <span>제1화 · r{ch.revision}</span>
+              <span>
+                제{episode}화 · r{ch.revision}
+              </span>
               <span>
                 문체 v{ch.styleVersion} · 캐논 v{ch.canonVersion}
               </span>
@@ -308,13 +332,13 @@ export default function WritingRoom({
                       const max = await askAI(
                         `다음 장면 「${next.title}」을 작성합니다. 승인 설정과 직전 장면 원고 일부를 전송합니다.`,
                         {
-                          path: base + "/scenes/" + next.id + "/write",
+                          path: episodePath("/scenes/" + next.id + "/write"),
                           data: { revision: p.revision },
                         },
                       );
                       if (max === null) return;
                       const data = await send(
-                        base + "/scenes/" + next.id + "/write",
+                        episodePath("/scenes/" + next.id + "/write"),
                         {
                           revision: p.revision,
                           consent: true,
@@ -373,7 +397,7 @@ export default function WritingRoom({
                 onClick={() =>
                   run(async () => {
                     if (!(await flush())) return;
-                    await send(base + "/chapter/snapshot", {
+                    await send(episodePath("/chapter/snapshot"), {
                       revision: chRef.current.revision,
                     });
                     notify("불변 원고 스냅샷을 저장했습니다.");
@@ -388,7 +412,7 @@ export default function WritingRoom({
                 size="sm"
                 onClick={() =>
                   run(async () =>
-                    setVersions(await api(base + "/chapter/versions")),
+                    setVersions(await api(episodePath("/chapter/versions"))),
                   )
                 }
               >
@@ -401,7 +425,7 @@ export default function WritingRoom({
                 onClick={() =>
                   download(
                     new Blob([text], { type: "text/plain;charset=utf-8" }),
-                    "제1화.txt",
+                    `제${episode}화.txt`,
                   )
                 }
               >
@@ -454,7 +478,7 @@ export default function WritingRoom({
                 onClick={() =>
                   run(async () => {
                     if (!(await flush())) return;
-                    const result = await send(base + "/chapter/approve", {
+                    const result = await send(episodePath("/chapter/approve"), {
                       revision: chRef.current.revision,
                       confirmed: true,
                       reviewed: true,
@@ -494,7 +518,7 @@ export default function WritingRoom({
                     onClick={() =>
                       run(async () =>
                         setVersion(
-                          await api(base + "/chapter/versions/" + v.id),
+                          await api(episodePath("/chapter/versions/" + v.id)),
                         ),
                       )
                     }
@@ -528,7 +552,7 @@ export default function WritingRoom({
                   onClick={() =>
                     run(async () => {
                       if (!(await flush())) return;
-                      const data = await send(base + "/chapter/restore", {
+                      const data = await send(episodePath("/chapter/restore"), {
                         revision: chRef.current.revision,
                         versionId: version.id,
                       });
@@ -585,7 +609,7 @@ export default function WritingRoom({
                 onClick={() =>
                   run(async () => {
                     const result = await send(
-                      base + "/chapter",
+                      episodePath("/chapter"),
                       { revision: conflict.revision, title, content: merged },
                       "PUT",
                     );
@@ -646,7 +670,7 @@ export default function WritingRoom({
                   const max = await askAI(
                     "선택한 원문 구간과 앞뒤 문맥 일부, 승인 문체를 전송해 최소 범위 수정안을 생성합니다.",
                     {
-                      path: base + "/chapter/rewrite",
+                      path: episodePath("/chapter/rewrite"),
                       data: {
                         revision: chRef.current.revision,
                         start,
@@ -656,7 +680,7 @@ export default function WritingRoom({
                     },
                   );
                   if (max === null) return;
-                  const result = await send(base + "/chapter/rewrite", {
+                  const result = await send(episodePath("/chapter/rewrite"), {
                     revision: chRef.current.revision,
                     start,
                     end: start + Array.from(passage).length,
@@ -711,7 +735,7 @@ export default function WritingRoom({
                   run(async () => {
                     if (!(await flush())) return;
                     adopt(
-                      await send(base + "/chapter/rewrite/apply", {
+                      await send(episodePath("/chapter/rewrite/apply"), {
                         revision: chRef.current.revision,
                         proposalId: proposal.id,
                       }),

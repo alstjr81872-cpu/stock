@@ -6,6 +6,10 @@
 
 STEP 2는 **큰 틀 잡기 → 연결된 가지 구체화 → 현재 기획 확인 → 스토리 설계** 순서로 진행합니다. 예전 11개 모듈을 채울 필요 없이 마음에 드는 트리를 승인해 다음 단계로 넘어갑니다. 기존 자료와 남은 미정은 보존합니다. [기획 트리 사용 방법](docs/planning-tree.md)을 참고하세요.
 
+STEP 3의 **자동 전개**는 누락·모호함을 먼저 점검하고, 설정과 장면을 단계별로 구체화합니다. [자동 전개 사용 방법](docs/story-development.md)을 참고하세요.
+
+시놉시스는 **1~10화부터 10화 단위로 기록**하고, 각 회차의 시놉시스와 목표 원고 분량을 바탕으로 집필합니다. [연재 시놉시스 사용 방법](docs/serial-synopsis.md)을 참고하세요.
+
 ## 무료 배포 경로
 
 **Cloudflare Workers Free + Supabase Free**용 서버와 정적 빌드를 추가했습니다. [단계별 배포 안내](docs/cloud-deployment.md)를 따르세요. `npm run build:cloud` → `npm run check:cloud`로 배포 파일을 검증합니다. 실제 프로젝트 SQL 적용·서버 Secret 입력·공개 배포·실제 Google 로그인은 아직 남아 있습니다. 아래 Firebase 설명은 보존된 로컬 개발 경로입니다.

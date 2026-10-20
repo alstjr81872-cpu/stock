@@ -1,5 +1,21 @@
 import { Store, type Operation } from "./store";
 import { planningCarryover } from "../lib/planning-tree";
+import {
+  episodeNumber,
+  chapterPath,
+  synopsisState,
+  proposeSynopsis,
+  applySynopsis,
+  selectEpisode,
+  writingSettings,
+  fitLength,
+  requirePreviousChapter,
+} from "./series";
+import {
+  proposeDevelopment,
+  applyDevelopment,
+  checkDevelopment,
+} from "./plot-development";
 import { proposePlanning, applyPlanning } from "./planning";
 import {
   seedTree,
@@ -32,14 +48,13 @@ import { extract, filename, overlap } from "./parsers";
 import assets from "./assets.json";
 import { zipSync } from "fflate";
 const modules: Record<string, string> = assets.modules;
-const cp = (pid: string) => `projects/${pid}/chapters/chapter-1`;
+const cp = (p: Doc) => chapterPath(p);
 const projectPath = (pid: string) => "projects/" + pid;
 const stylePath = (sid: string) => "style_profiles/" + sid;
 const values = (d: Doc): Doc[] => Object.values(d);
 const approved = (ch: Doc) => ["APPROVED", "LOCKED"].includes(ch.status);
-async function chapter(s: Store, pid: string) {
-  await s.get(projectPath(pid));
-  return s.hydrate(await s.get(cp(pid)));
+async function chapter(s: Store, p: Doc) {
+  return s.hydrate(await s.get(cp(p)));
 }
 async function updateChapter(
   s: Store,
@@ -52,6 +67,11 @@ async function updateChapter(
 ) {
   const p = await s.get(projectPath(pid));
   check(
+    (ch.number ?? 1) === episodeNumber(p),
+    "선택한 회차가 변경됐습니다. 원고를 다시 불러와주세요.",
+    409,
+  );
+  check(
     !approved(ch) || allowLocked,
     "확정 원고는 새 초안으로 분기해 편집하세요.",
   );
@@ -62,13 +82,16 @@ async function updateChapter(
   }
   const ops: Operation[] = [];
   if (approved(ch)) {
+    p.completedEpisodes = (p.completedEpisodes ?? []).filter(
+      (n: number) => n !== (ch.number ?? 1),
+    );
     if (p.plot) p.plot.status = "INVALIDATED";
     ops.push(s.prepare(projectPath(pid), p, p.revision));
     fields.draftRevision = ch.revision + 1;
   } else
     ops.push({ path: projectPath(pid), expected: p.revision, guard: true });
   const next = s.prepare(
-    cp(pid),
+    cp(p),
     { ...ch, ...fields, lastSavedBy: s.uid },
     ch.revision,
   );
@@ -86,6 +109,7 @@ function audit(s: Store, pid: string, kind: string, data: Doc) {
 }
 async function compile(s: Store, p: Doc, sceneId: string) {
   active(p);
+  await requirePreviousChapter(s, p);
   const plot = p.plot;
   check(plot?.status === "APPROVED", "현재 구간 플롯 승인이 필요합니다.");
   check(
@@ -95,8 +119,15 @@ async function compile(s: Store, p: Doc, sceneId: string) {
   );
   const scene = plot.scenes.find((x: Doc) => x.id === sceneId);
   check(scene, "장면을 찾을 수 없습니다.", 404);
-  const ch = await s.find(cp(p.id));
-  const previous = ch ? cut((await s.hydrate(ch)).content, -1500) : "";
+  const ch = await s.find(cp(p));
+  const prior =
+    ch ??
+    (episodeNumber(p) > 1
+      ? await s.find(
+          `projects/${p.id}/chapters/chapter-${episodeNumber(p) - 1}`,
+        )
+      : null);
+  const previous = prior ? cut((await s.hydrate(prior)).content, -1500) : "";
   return {
     version: "compiler-v1",
     layerVersions: {
@@ -113,6 +144,9 @@ async function compile(s: Store, p: Doc, sceneId: string) {
         requirements: p.requirements,
         bible: p.planningMode === "tree" ? {} : p.bible,
         common_planning_tree: p.planningTree ?? null,
+        plot_continuation_notes: p.plot?.continuationNotes ?? [],
+        episode_number: episodeNumber(p),
+        episode_synopsis: p.episodeSynopsis ?? null,
         pending_planning:
           p.planningMode === "tree" ? planningCarryover(p) : null,
         planning_decisions: p.planningDecisions ?? [],
@@ -564,6 +598,11 @@ export async function handleApi(request: Request, s: Store): Promise<unknown> {
         "planning_history",
         "tree_proposals",
         "tree_history",
+        "plot_proposals",
+        "plot_history",
+        "plot_checks",
+        "synopsis_batches",
+        "episode_plans",
       ])
         subcollections[name] = await s.list(`${pp}/${name}`);
       files["project.json"] = bytes(
@@ -604,6 +643,24 @@ export async function handleApi(request: Request, s: Store): Promise<unknown> {
     }
     // All other project operations require a live, owned project.
     const p = await s.get(pp);
+    if (["chapter", "scenes", "prompt"].includes(parts[2])) {
+      const requested = url.searchParams.get("episode");
+      check(
+        (!requested && !p.seriesEnabled) ||
+          Number(requested) === episodeNumber(p),
+        "선택한 회차가 변경됐습니다. 현재 회차를 다시 불러와주세요.",
+        409,
+      );
+    }
+    if (action === "synopsis" && method === "GET") return synopsisState(s, p);
+    if (action === "synopsis/generate" && method === "POST")
+      return proposeSynopsis(s, p, body);
+    if (action === "synopsis/apply" && method === "POST")
+      return applySynopsis(s, p, body);
+    if (action === "episodes/select" && method === "POST")
+      return selectEpisode(s, p, body);
+    if (action === "writing-settings" && method === "PUT")
+      return writingSettings(s, p, body);
     if (action === "answers" && method === "PUT") {
       parsed("Answers");
       return s.change(pp, body.revision, (d) => {
@@ -941,6 +998,12 @@ export async function handleApi(request: Request, s: Store): Promise<unknown> {
         ],
       );
     }
+    if (action === "plot/develop/check" && method === "POST")
+      return checkDevelopment(s, p, body);
+    if (action === "plot/develop" && method === "POST")
+      return proposeDevelopment(s, p, body);
+    if (action === "plot/develop/apply" && method === "POST")
+      return applyDevelopment(s, p, body);
     if (action === "plot/generate" && method === "POST") {
       parsed("AIRequest");
       revision(p, body.revision);
@@ -958,7 +1021,8 @@ export async function handleApi(request: Request, s: Store): Promise<unknown> {
           approved_style: p.styleBinding.snapshot,
           requirements: p.requirements,
           answers: p.answers,
-          target: "1화 2~6개 장면, 장기 방향은 느슨한 아크",
+          episode_synopsis: p.episodeSynopsis ?? null,
+          target: `${episodeNumber(p)}화, 공백 제외 목표 ${p.targetChars ?? 5000}자. 장면 ${Math.max(2, Math.ceil((p.targetChars ?? 5000) / 5000))}~6개. 승인된 해당 회차 시놉시스의 사건과 결말 연결을 구체화한다.`,
         },
         body,
         { projectId: pid },
@@ -972,7 +1036,7 @@ export async function handleApi(request: Request, s: Store): Promise<unknown> {
       return s.change(pp, body.revision, (d) => {
         active(d);
         d.plot = {
-          ...result,
+          ...fitLength(result, p.targetChars),
           status: "REVIEW",
           version: (d.plot?.version ?? 0) + 1,
           canonVersion: d.canonVersion,
@@ -991,7 +1055,7 @@ export async function handleApi(request: Request, s: Store): Promise<unknown> {
       return s.change(pp, body.revision, (d) => {
         active(d);
         d.plot = {
-          ...body.plot,
+          ...fitLength(body.plot, p.targetChars),
           status: "REVIEW",
           version: (d.plot?.version ?? 0) + 1,
           canonVersion: d.canonVersion,
@@ -1012,8 +1076,17 @@ export async function handleApi(request: Request, s: Store): Promise<unknown> {
           );
           check(
             !d.plot.risks.length && !d.plot.openQuestions.length,
-            "플롯의 미결정·위험을 편집으로 해결하세요.",
+            "현재 회차의 미결정·위험이 남아 있습니다. 자동 전개로 해결하거나 플롯을 직접 다듬어주세요.",
           );
+          if (d.targetChars)
+            check(
+              d.plot.scenes.reduce(
+                (sum: number, sc: Doc) => sum + sc.targetChars,
+                0,
+              ) === d.targetChars,
+              "설정한 목표 분량에 맞게 회차를 다시 설계해주세요.",
+              422,
+            );
           Object.assign(d.plot, {
             status: "APPROVED",
             approvedAt: now(),
@@ -1038,7 +1111,7 @@ export async function handleApi(request: Request, s: Store): Promise<unknown> {
       revision(p, body.revision);
       const sceneId = parts[3],
         compiled = await compile(s, p, sceneId),
-        old = await s.find(cp(pid)),
+        old = await s.find(cp(p)),
         ch = old ? await s.hydrate(old) : null;
       check(!ch || !approved(ch), "확정 원고에 AI가 쓸 수 없습니다.");
       const done = ch?.writtenScenes ?? [];
@@ -1068,17 +1141,21 @@ export async function handleApi(request: Request, s: Store): Promise<unknown> {
           ...compiled,
           run,
         }),
-        s.prepare(`${pp}/scenes/${sceneId}`, {
-          sceneOrder: done.length + 1,
-          content: result,
-          promptBuildId: run.requestId,
-          createdAt: now(),
-        }),
+        s.prepare(
+          `${pp}/scenes/${episodeNumber(p) === 1 ? sceneId : `chapter-${episodeNumber(p)}-${sceneId}`}`,
+          {
+            sceneOrder: done.length + 1,
+            content: result,
+            promptBuildId: run.requestId,
+            createdAt: now(),
+          },
+        ),
       ];
       if (ch)
         return updateChapter(s, pid, ch, fields, false, p.revision, extras);
-      const op = s.prepare(cp(pid), {
-        id: "chapter-1",
+      const op = s.prepare(cp(p), {
+        id: `chapter-${episodeNumber(p)}`,
+        number: episodeNumber(p),
         title: p.plot.chapterTitle,
         createdAt: now(),
         approvalStatus: "DRAFT",
@@ -1092,10 +1169,10 @@ export async function handleApi(request: Request, s: Store): Promise<unknown> {
       ]);
       return s.hydrate(op.data!);
     }
-    if (action === "chapter" && method === "GET") return chapter(s, pid);
+    if (action === "chapter" && method === "GET") return chapter(s, p);
     if (action === "chapter" && method === "PUT") {
       parsed("ChapterSave");
-      const ch = await chapter(s, pid);
+      const ch = await chapter(s, p);
       revision(ch, body.revision);
       return updateChapter(
         s,
@@ -1113,18 +1190,20 @@ export async function handleApi(request: Request, s: Store): Promise<unknown> {
     }
     if (action === "chapter/snapshot" && method === "POST") {
       parsed("Revision");
-      const ch = await chapter(s, pid);
+      const ch = await chapter(s, p);
       revision(ch, body.revision);
       const archive = await s.archive(pid, ch);
       await s.commit([
-        { path: cp(pid), expected: ch.revision, guard: true },
+        { path: cp(p), expected: ch.revision, guard: true },
         archive,
       ]);
       return archive.data;
     }
     if (action === "chapter/versions" && method === "GET")
       return (await s.list(`${pp}/chapter_versions`)).filter(
-        (v) => v.status === "COMMITTED",
+        (v) =>
+          v.status === "COMMITTED" &&
+          (v.chapterId ?? "chapter-1") === `chapter-${episodeNumber(p)}`,
       );
     if (
       parts[2] === "chapter" &&
@@ -1133,14 +1212,24 @@ export async function handleApi(request: Request, s: Store): Promise<unknown> {
       method === "GET"
     ) {
       const v = await s.get(`${pp}/chapter_versions/${parts[4]}`);
+      check(
+        (v.chapterId ?? "chapter-1") === `chapter-${episodeNumber(p)}`,
+        "이 회차의 버전이 아닙니다.",
+        404,
+      );
       check(v.status === "COMMITTED", "버전이 없습니다.", 404);
       return { ...v, content: new TextDecoder().decode(await s.read(v)) };
     }
     if (action === "chapter/restore" && method === "POST") {
       parsed("Restore");
-      const ch = await chapter(s, pid);
+      const ch = await chapter(s, p);
       revision(ch, body.revision);
       const v = await s.get(`${pp}/chapter_versions/${body.versionId}`);
+      check(
+        (v.chapterId ?? "chapter-1") === ch.id,
+        "이 회차의 버전이 아닙니다.",
+        404,
+      );
       check(v.status === "COMMITTED", "버전이 없습니다.", 404);
       const content = new TextDecoder().decode(await s.read(v));
       return updateChapter(
@@ -1160,7 +1249,7 @@ export async function handleApi(request: Request, s: Store): Promise<unknown> {
     }
     if (action === "chapter/review" && method === "POST") {
       parsed("AIRequest");
-      const ch = await chapter(s, pid);
+      const ch = await chapter(s, p);
       revision(ch, body.revision);
       check(!approved(ch), "확정 원고 검토는 새 초안에서 진행하세요.");
       check(p.styleBinding, "승인된 문체가 필요합니다.");
@@ -1207,7 +1296,7 @@ export async function handleApi(request: Request, s: Store): Promise<unknown> {
     }
     if (action === "chapter/rewrite" && method === "POST") {
       parsed("PartialEdit");
-      const ch = await chapter(s, pid);
+      const ch = await chapter(s, p);
       revision(ch, body.revision);
       check(
         !approved(ch) &&
@@ -1236,6 +1325,7 @@ export async function handleApi(request: Request, s: Store): Promise<unknown> {
       );
       return s.create(`${pp}/revision_runs/${run.requestId}`, {
         ...result,
+        chapterId: ch.id,
         inputHash: ch.contentHash,
         inputRevision: ch.revision,
         start: body.start,
@@ -1246,12 +1336,13 @@ export async function handleApi(request: Request, s: Store): Promise<unknown> {
     }
     if (action === "chapter/rewrite/apply" && method === "POST") {
       parsed("ApplyRewrite");
-      const ch = await chapter(s, pid);
+      const ch = await chapter(s, p);
       revision(ch, body.revision);
       const propPath = `${pp}/revision_runs/${body.proposalId}`,
         prop = await s.get(propPath);
       check(
-        prop.inputHash === ch.contentHash &&
+        (prop.chapterId ?? "chapter-1") === ch.id &&
+          prop.inputHash === ch.contentHash &&
           prop.inputRevision === ch.revision &&
           prop.status === "PROPOSED",
         "수정 제안 이후 원고가 바뀌었습니다. 다시 검토하세요.",
@@ -1281,7 +1372,7 @@ export async function handleApi(request: Request, s: Store): Promise<unknown> {
     if (action === "chapter/approve" && method === "POST") {
       parsed("ChapterApprove");
       active(p);
-      const ch = await chapter(s, pid);
+      const ch = await chapter(s, p);
       revision(ch, body.revision);
       check(!approved(ch), "이미 확정된 회차입니다.");
       check(
@@ -1303,9 +1394,15 @@ export async function handleApi(request: Request, s: Store): Promise<unknown> {
         "플롯 승인 및 모든 장면 집필을 완료하세요.",
       );
       const archive = await s.archive(pid, ch),
-        nextP = { ...p, canonVersion: p.canonVersion + 1 };
+        nextP = {
+          ...p,
+          canonVersion: p.canonVersion + 1,
+          completedEpisodes: [
+            ...new Set([...(p.completedEpisodes ?? []), episodeNumber(p)]),
+          ],
+        };
       const next = s.prepare(
-        cp(pid),
+        cp(p),
         {
           ...ch,
           status: "APPROVED",
@@ -1322,7 +1419,7 @@ export async function handleApi(request: Request, s: Store): Promise<unknown> {
         next,
         archive,
         audit(s, pid, "CHAPTER", {
-          chapterId: "chapter-1",
+          chapterId: ch.id,
           contentHash: ch.contentHash,
           canonVersion: nextP.canonVersion,
           styleVersion: ch.styleVersion,

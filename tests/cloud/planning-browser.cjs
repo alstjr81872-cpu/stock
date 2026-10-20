@@ -110,7 +110,12 @@ const fixtures = require("./fixtures.json");
       preflights = 0,
       generations = 0,
       applies = 0,
-      nameSuggestions = 0;
+      nameSuggestions = 0,
+      developments = 0,
+      developmentChecks = 0,
+      plotProposal,
+      synopsisProposal;
+    const synopsisBatches = [];
     const clean = (n) =>
       Object.fromEntries(
         [
@@ -145,7 +150,174 @@ const fixtures = require("./fixtures.json");
       else if (path === "/api/styles") data = [];
       else if (path === "/api/projects/tree-ui") data = p;
       else if (path.endsWith("/tree")) data = seedTree(p);
-      else if (path.endsWith("/suggest-name")) {
+      else if (path.endsWith("/synopsis"))
+        data = {
+          batches: synopsisBatches,
+          currentEpisode: p.currentEpisode ?? 1,
+          targetChars: p.targetChars ?? 5000,
+          nextStart: synopsisBatches.at(-1)?.end + 1 || 1,
+          canExtend:
+            !synopsisBatches.length ||
+            (p.completedEpisodes ?? []).includes(synopsisBatches.at(-1).end),
+        };
+      else if (path.endsWith("/writing-settings")) {
+        p = {
+          ...p,
+          revision: p.revision + 1,
+          targetChars: request.postDataJSON().targetChars,
+          defaultTargetChars: request.postDataJSON().targetChars,
+        };
+        data = p;
+      } else if (path.endsWith("/synopsis/generate")) {
+        if (request.headers()["x-nf-preflight"] === "1")
+          data = {
+            estimateOnly: true,
+            model: "test/model",
+            estimatedMaxUsd: 0.1,
+            suggestedMaxCostUsd: 0.1,
+            remainingMonthlyUsd: 5,
+            maxOutputTokens: 8192,
+          };
+        else {
+          const start = synopsisBatches.at(-1)?.end + 1 || 1;
+          synopsisProposal = {
+            id: "synopsis-" + start,
+            inputRevision: p.revision,
+            start,
+            end: start + 9,
+            result: {
+              summary:
+                "열 회차의 사건과 인물 변화를 유기적으로 연결한 시놉시스입니다.",
+              episodes: Array.from({ length: 10 }, (_, i) => ({
+                number: start + i,
+                title: `${start + i}화 기록의 약속`,
+                synopsis:
+                  "인물이 잃어버린 기록을 되찾기 위해 약속을 선택하고, 그 선택의 결과를 통해 새로운 사건의 단서를 발견한다.",
+                characterChange: "동료와 작은 신뢰를 쌓는다.",
+                endingHook: "기록의 마지막 줄이 다음 사건을 연다.",
+              })),
+            },
+          };
+          data = synopsisProposal;
+        }
+      } else if (path.endsWith("/synopsis/apply")) {
+        synopsisBatches.push({ ...synopsisProposal, status: "APPLIED" });
+        const number = synopsisProposal.start;
+        p = {
+          ...p,
+          revision: p.revision + 1,
+          seriesEnabled: true,
+          currentEpisode: number,
+          episodeSynopsis: synopsisProposal.result.episodes[0],
+          synopsisThrough: synopsisProposal.end,
+          plot: number > 1 ? null : p.plot,
+        };
+        data = p;
+      } else if (path.endsWith("/episodes/select")) {
+        const number = request.postDataJSON().number;
+        p = {
+          ...p,
+          revision: p.revision + 1,
+          currentEpisode: number,
+          episodeSynopsis: synopsisBatches
+            .flatMap((b) => b.result.episodes)
+            .find((e) => e.number === number),
+          plot: null,
+        };
+        data = p;
+      } else if (
+        path.endsWith("/plot/generate") ||
+        path.endsWith("/plot/develop") ||
+        path.endsWith("/plot/develop/check")
+      ) {
+        if (request.headers()["x-nf-preflight"] === "1")
+          data = {
+            estimateOnly: true,
+            model: "test/model",
+            estimatedMaxUsd: 0.1,
+            suggestedMaxCostUsd: 0.1,
+            remainingMonthlyUsd: 5,
+            maxOutputTokens: 8192,
+          };
+        else if (path.endsWith("/check")) {
+          developmentChecks++;
+          data = {
+            id: "plot-check",
+            inputRevision: p.revision,
+            result: {
+              summary:
+                "장면 사이에 시간이 어떻게 흘렀는지 모호한 부분을 찾았습니다.",
+              gaps: [
+                {
+                  id: "gap-time",
+                  title: "시간 전환",
+                  detail:
+                    "첫 장면과 다음 장면 사이의 시간 경과를 구체화해야 합니다.",
+                  scope: "current",
+                },
+              ],
+            },
+          };
+        } else if (path.endsWith("/generate")) {
+          p = {
+            ...p,
+            revision: p.revision + 1,
+            plot: {
+              ...structuredClone(fixtures.plot),
+              status: "REVIEW",
+              version: 1,
+              risks: ["행동 동기가 부족하다."],
+              openQuestions: ["후반 결말은?"],
+            },
+          };
+          data = p;
+        } else {
+          developments++;
+          assert.equal(request.postDataJSON().auditId, "plot-check");
+          const preview = {
+            ...structuredClone(fixtures.plot),
+            continuationNotes: ["후반 결말은 이후 아크에서 결정한다."],
+          };
+          preview.scenes[0].action = "기록을 돌려주기 위한 약속을 선택한다.";
+          plotProposal = {
+            id: "development-preview",
+            inputRevision: p.revision,
+            result: {
+              summary:
+                "첫 회차의 동기를 구체화하고 장기 결말을 이후 메모로 남깁니다.",
+              decisions: [
+                {
+                  issueId: "risk-0",
+                  disposition: "resolved",
+                  resolution:
+                    "기록을 돌려주려는 행동 동기를 첫 장면에 반영했습니다.",
+                },
+                {
+                  issueId: "question-0",
+                  disposition: "later",
+                  resolution:
+                    "후반 결말은 지금 집필에 필요하지 않아 이후 아크에서 결정합니다.",
+                },
+                {
+                  issueId: "gap-time",
+                  disposition: "resolved",
+                  resolution:
+                    "같은 날 오후의 사건으로 시간을 정해 장면 사이를 연결합니다.",
+                },
+              ],
+            },
+            preview,
+          };
+          data = plotProposal;
+        }
+      } else if (path.endsWith("/plot/develop/apply")) {
+        p = {
+          ...p,
+          revision: p.revision + 1,
+          plot: { ...plotProposal.preview, status: "REVIEW", version: 2 },
+        };
+        data = p;
+      } else if (path.endsWith("/suggest-name")) {
         if (request.headers()["x-nf-preflight"] === "1")
           data = {
             estimateOnly: true,
@@ -408,9 +580,122 @@ const fixtures = require("./fixtures.json");
     assert(
       await page
         .getByRole("button", { name: "첫 회차 설계", exact: true })
-        .isEnabled(),
+        .isDisabled(),
     );
+    await page
+      .getByRole("spinbutton", { name: "원고 목표 글자 수" })
+      .fill("6000");
+    await page.getByRole("button", { name: "분량 저장", exact: true }).click();
+    await page
+      .getByRole("button", { name: "1~10화 시놉시스 설계", exact: true })
+      .click();
+    await page
+      .getByRole("checkbox", { name: "전송 범위와 실행 한도를 확인했습니다." })
+      .check();
+    await page
+      .getByRole("button", { name: "확인하고 실행", exact: true })
+      .click();
+    const synopsisModal = page.getByRole("dialog", {
+      name: "1~10화 시놉시스 제안",
+      exact: true,
+    });
+    await synopsisModal.waitFor();
+    assert.equal(synopsisBatches.length, 0);
+    await synopsisModal
+      .getByRole("button", { name: "이 구간 기록", exact: true })
+      .click();
+    await synopsisModal.waitFor({ state: "hidden" });
+    assert.equal(synopsisBatches[0].result.episodes.length, 10);
+    assert.equal(p.targetChars, 6000);
     assert.equal(p.planningTree.issues[0].status, "open");
+    await page
+      .getByRole("button", { name: "첫 회차 설계", exact: true })
+      .click();
+    await page
+      .getByRole("checkbox", { name: "전송 범위와 실행 한도를 확인했습니다." })
+      .check();
+    await page
+      .getByRole("button", { name: "확인하고 실행", exact: true })
+      .click();
+    await page.getByRole("button", { name: "자동 전개", exact: true }).click();
+    await page
+      .getByRole("checkbox", { name: "전송 범위와 실행 한도를 확인했습니다." })
+      .check();
+    assert.equal(developments, 0);
+    await page
+      .getByRole("button", { name: "확인하고 실행", exact: true })
+      .click();
+    await page.getByText(/^자동 전개 2\/2:/).waitFor();
+    assert.equal(developmentChecks, 1);
+    assert.equal(developments, 0);
+    await page
+      .getByRole("checkbox", { name: "전송 범위와 실행 한도를 확인했습니다." })
+      .check();
+    await page
+      .getByRole("button", { name: "확인하고 실행", exact: true })
+      .click();
+    const developmentModal = page.getByRole("dialog", {
+      name: "자동 전개 제안",
+      exact: true,
+    });
+    await developmentModal.waitFor();
+    assert.equal(developments, 1);
+    assert.equal(p.plot.risks.length, 1);
+    await developmentModal
+      .getByRole("button", { name: "이 전개 반영", exact: true })
+      .click();
+    await developmentModal.waitFor({ state: "hidden" });
+    await page
+      .getByText("후반 결말은 이후 아크에서 결정한다.", { exact: true })
+      .waitFor();
+    const approvePlot = page.getByRole("button", {
+      name: "플롯 승인 · 집필실로",
+      exact: true,
+    });
+    assert(await approvePlot.isDisabled());
+    await page
+      .getByRole("checkbox", {
+        name: "인과·관계 진전·미정과 위험을 검수하고 현재 플롯을 승인합니다.",
+      })
+      .check();
+    assert(await approvePlot.isEnabled());
+    assert.equal(p.plot.openQuestions.length, 0);
+    p.completedEpisodes = Array.from({ length: 10 }, (_, i) => i + 1);
+    await page
+      .getByRole("combobox", { name: "집필할 회차" })
+      .selectOption("10");
+    const nextBatchModal = page.getByRole("dialog", {
+      name: "다음 10화 시놉시스",
+      exact: true,
+    });
+    await nextBatchModal
+      .getByRole("heading", {
+        name: "11화부터 20화까지 시놉시스를 만들까요?",
+        exact: true,
+      })
+      .waitFor();
+    await nextBatchModal
+      .getByRole("button", { name: "만들기", exact: true })
+      .click();
+    await page
+      .getByRole("checkbox", { name: "전송 범위와 실행 한도를 확인했습니다." })
+      .check();
+    await page
+      .getByRole("button", { name: "확인하고 실행", exact: true })
+      .click();
+    const secondBatchModal = page.getByRole("dialog", {
+      name: "11~20화 시놉시스 제안",
+      exact: true,
+    });
+    await secondBatchModal
+      .getByRole("button", { name: "이 구간 기록", exact: true })
+      .click();
+    await secondBatchModal.waitFor({ state: "hidden" });
+    assert.equal(p.currentEpisode, 11);
+    assert.equal(synopsisBatches.length, 2);
+    await page
+      .getByRole("button", { name: "11화 장면 설계", exact: true })
+      .waitFor();
     await page.getByRole("button", { name: /STEP 02/ }).click();
     await page
       .getByRole("button", { name: "스토리 설계로 이동", exact: true })

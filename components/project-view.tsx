@@ -27,6 +27,7 @@ import { Badge, Empty, Modal, useActions } from "./workspace";
 import { Button } from "./ui/button";
 import WritingRoom from "./writing-room";
 import PlanningTree from "./planning-tree";
+import SeriesPlanner from "./series-planner";
 export default function ProjectView({
   id,
   styles,
@@ -47,6 +48,10 @@ export default function ProjectView({
     [prompt, setPrompt] = useState<any>(null),
     [analysisEdit, setAnalysisEdit] = useState<string | null>(null),
     [planningProposal, setPlanningProposal] = useState<any>(null);
+  const [development, setDevelopment] = useState<any>(null);
+  const [developmentAudit, setDevelopmentAudit] = useState<any>(null),
+    [developmentPhase, setDevelopmentPhase] = useState(""),
+    [developmentError, setDevelopmentError] = useState("");
   async function load() {
     const data = await api("/projects/" + id);
     setP(data);
@@ -55,11 +60,67 @@ export default function ProjectView({
   useEffect(() => {
     run(load);
   }, [id]);
+  useEffect(() => {
+    setPlotConfirm(false);
+  }, [p?.revision]);
+  async function developPlot(savedAudit: any = null) {
+    const path = "/projects/" + id + "/plot/develop";
+    setDevelopmentError("");
+    try {
+      let audit = savedAudit;
+      if (!audit) {
+        setDevelopmentPhase("1/2 · 빠진 설정과 애매한 연결 점검");
+        const max = await askAI(
+          "자동 전개 1/2: 기획과 현재 플롯에서 빠뜨린 설정, 인물의 행동 이유, 모호한 장면 연결을 점검합니다. 점검 뒤 구체화 비용을 별도로 확인합니다.",
+          { path: path + "/check", data: { revision: p.revision } },
+        );
+        if (max === null) return;
+        audit = await send(path + "/check", {
+          revision: p.revision,
+          consent: true,
+          maxCostUsd: max,
+        });
+        setDevelopmentAudit(audit);
+      }
+      setDevelopmentPhase("2/2 · 필요한 설정과 장면 구체화");
+      const max = await askAI(
+        "자동 전개 2/2: 점검에서 발견한 누락·모호함과 기존 미정·위험을 바탕으로 설정과 장면을 구체화합니다. 지금 필요하지 않은 장기 결정은 이후 전개 메모로 남깁니다.",
+        { path, data: { revision: p.revision, auditId: audit.id } },
+      );
+      if (max === null) return;
+      setDevelopment(
+        await send(path, {
+          revision: p.revision,
+          auditId: audit.id,
+          consent: true,
+          maxCostUsd: max,
+        }),
+      );
+      setDevelopmentAudit(null);
+    } catch (error) {
+      setDevelopmentError(
+        error instanceof Error
+          ? error.message
+          : "자동 전개를 완료하지 못했습니다.",
+      );
+      throw error;
+    } finally {
+      setDevelopmentPhase("");
+    }
+  }
   async function action(path: string, data: any, method = "POST") {
     const result = await send("/projects/" + id + path, data, method);
     setP(result);
     await refresh();
     return result;
+  }
+  async function nextEpisode() {
+    if (!(await canLeave())) return;
+    const number = (p.currentEpisode ?? 1) + 1;
+    if (number <= (p.synopsisThrough ?? 0)) {
+      await action("/episodes/select", { revision: p.revision, number });
+    }
+    setTab("plot");
   }
   async function generate(path: string, scope: string) {
     const max = await askAI(scope, {
@@ -656,8 +717,26 @@ export default function ProjectView({
               </div>
             </>
           )}
+          {mode === "supabase" &&
+            p.status === "ACTIVE" &&
+            ["plot", "writing"].includes(tab) && (
+              <SeriesPlanner
+                project={p}
+                onUpdate={async (data) => {
+                  setP(data);
+                  await refresh();
+                }}
+                beforeSelect={canLeave}
+                onSelected={() => setTab("plot")}
+              />
+            )}
           {tab === "plot" && (
             <>
+              {developmentPhase && (
+                <div className="info-note" role="status">
+                  {developmentPhase}
+                </div>
+              )}
               <div className="section-heading">
                 <div>
                   <h2>사건에서 선택으로, 선택에서 이야기로</h2>
@@ -666,18 +745,26 @@ export default function ProjectView({
                   </p>
                 </div>
                 <Button
-                  disabled={busy || p.status !== "ACTIVE"}
+                  disabled={
+                    busy ||
+                    p.status !== "ACTIVE" ||
+                    (mode === "supabase" && !p.episodeSynopsis && !p.plot)
+                  }
                   onClick={() =>
                     run(() =>
                       generate(
                         "/plot/generate",
-                        "승인 기획서와 문체를 바탕으로 장기 방향과 1화의 2~6개 장면을 설계합니다.",
+                        `기록한 ${p.currentEpisode ?? 1}화 시놉시스와 승인 기획·문체를 바탕으로 목표 분량 ${p.targetChars ?? 5000}자의 장면을 설계합니다.`,
                       ),
                     )
                   }
                 >
                   <Sparkles size={16} />
-                  {p.plot ? "플롯 다시 설계" : "첫 회차 설계"}
+                  {p.plot
+                    ? "플롯 다시 설계"
+                    : (p.currentEpisode ?? 1) === 1
+                      ? "첫 회차 설계"
+                      : `${p.currentEpisode}화 장면 설계`}
                 </Button>
               </div>
               {p.status !== "ACTIVE" && (
@@ -720,26 +807,43 @@ export default function ProjectView({
                     </div>
                   </div>
                   <div className="section-heading">
-                    <h2>제1화 · {p.plot.chapterTitle}</h2>
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      onClick={() => {
-                        const {
-                          status,
-                          version,
-                          canonVersion,
-                          run,
-                          approvedAt,
-                          approvedBy,
-                          styleVersion,
-                          ...draft
-                        } = p.plot;
-                        setJsonPlot(JSON.stringify(draft, null, 2));
-                      }}
-                    >
-                      플롯 직접 편집
-                    </Button>
+                    <h2>
+                      제{p.currentEpisode ?? 1}화 · {p.plot.chapterTitle}
+                    </h2>
+                    <div className="button-row">
+                      {mode === "supabase" && (
+                        <Button
+                          variant="secondary"
+                          disabled={
+                            busy ||
+                            p.status !== "ACTIVE" ||
+                            p.plot.status === "APPROVED"
+                          }
+                          onClick={() => run(developPlot)}
+                        >
+                          <Sparkles size={15} /> 자동 전개
+                        </Button>
+                      )}
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        onClick={() => {
+                          const {
+                            status,
+                            version,
+                            canonVersion,
+                            run,
+                            approvedAt,
+                            approvedBy,
+                            styleVersion,
+                            ...draft
+                          } = p.plot;
+                          setJsonPlot(JSON.stringify(draft, null, 2));
+                        }}
+                      >
+                        플롯 직접 편집
+                      </Button>
+                    </div>
                   </div>
                   <div className="scene-grid">
                     {p.plot.scenes.map((s: any, i: number) => (
@@ -779,7 +883,12 @@ export default function ProjectView({
                             run(async () =>
                               setPrompt(
                                 await api(
-                                  "/projects/" + id + "/prompt/" + s.id,
+                                  "/projects/" +
+                                    id +
+                                    "/prompt/" +
+                                    s.id +
+                                    "?episode=" +
+                                    (p.currentEpisode ?? 1),
                                 ),
                               ),
                             )
@@ -799,6 +908,21 @@ export default function ProjectView({
                           <p key={i}>{s}</p>
                         ),
                       )}
+                    </div>
+                  )}
+                  {p.plot.continuationNotes?.length > 0 && (
+                    <div className="info-note">
+                      <div>
+                        <strong>이후 전개 메모</strong>
+                        {p.plot.continuationNotes.map(
+                          (note: string, i: number) => (
+                            <p key={i}>{note}</p>
+                          ),
+                        )}
+                        <p className="muted">
+                          현재 회차의 집필을 막지 않는 장기 결정입니다.
+                        </p>
+                      </div>
                     </div>
                   )}
                   <div className="panel approve-plot">
@@ -840,7 +964,12 @@ export default function ProjectView({
             </>
           )}
           {tab === "writing" && (
-            <WritingRoom project={p} reloadProject={load} />
+            <WritingRoom
+              key={p.currentEpisode ?? 1}
+              project={p}
+              reloadProject={load}
+              onNext={mode === "supabase" ? nextEpisode : undefined}
+            />
           )}
         </>
       )}
@@ -910,6 +1039,174 @@ export default function ProjectView({
             >
               플롯 저장
             </Button>
+          </div>
+        </Modal>
+      )}
+      {developmentAudit && !development && (
+        <Modal
+          title="자동 전개 · 누락 점검"
+          wide
+          onClose={() => !busy && setDevelopmentAudit(null)}
+        >
+          <div className="modal-body">
+            <p>{developmentAudit.result.summary}</p>
+            <p className="muted">
+              1단계 점검은 완료됐습니다. 2단계에서 아래 항목과 기존 미정을 함께
+              구체화합니다.
+            </p>
+            {developmentAudit.result.gaps.map((gap: any) => (
+              <div className="panel" key={gap.id}>
+                <strong>{gap.title}</strong>
+                <Badge>
+                  {gap.scope === "current"
+                    ? "현재 회차에 필요"
+                    : "이후 전개에서 결정"}
+                </Badge>
+                <p>{gap.detail}</p>
+              </div>
+            ))}
+            {developmentError && <p role="alert">{developmentError}</p>}
+            {!developmentAudit.result.gaps.length && (
+              <p>
+                추가로 발견한 누락은 없습니다. 기존 플롯의 연결과 미정을
+                다듬습니다.
+              </p>
+            )}
+            {developmentAudit.inputRevision !== p.revision && (
+              <p role="alert">
+                기획이나 플롯이 바뀌었습니다. 닫은 뒤 최신 플롯에서 다시
+                점검해주세요.
+              </p>
+            )}
+            <div className="button-row">
+              <Button
+                disabled={busy || developmentAudit.inputRevision !== p.revision}
+                onClick={() => run(() => developPlot(developmentAudit))}
+              >
+                점검 결과로 전개 계속
+              </Button>
+              <Button
+                variant="secondary"
+                disabled={busy}
+                onClick={() => setDevelopmentAudit(null)}
+              >
+                나중에
+              </Button>
+            </div>
+          </div>
+        </Modal>
+      )}
+      {development && (
+        <Modal
+          title="자동 전개 제안"
+          wide
+          onClose={() => !busy && setDevelopment(null)}
+        >
+          <div className="modal-body">
+            <p>{development.result.summary}</p>
+            <h3>미정 · 위험 정리</h3>
+            {development.result.decisions.map((decision: any) => (
+              <div className="panel" key={decision.issueId}>
+                <strong>
+                  {development.issues?.find(
+                    (issue: any) => issue.id === decision.issueId,
+                  )?.text || "전개 보완"}
+                </strong>
+                <Badge>
+                  {decision.disposition === "resolved"
+                    ? "이번 회차에 반영"
+                    : decision.disposition === "later"
+                      ? "이후 전개로 연결"
+                      : "추가 확인 필요"}
+                </Badge>
+                <p>{decision.resolution}</p>
+              </div>
+            ))}
+            <h3>다듬은 장면</h3>
+            {development.preview.scenes.map((scene: any) => (
+              <div className="panel" key={scene.id}>
+                <h4>{scene.title}</h4>
+                <p>{scene.startState}</p>
+                <p>
+                  {scene.goal} · {scene.action}
+                </p>
+                <p>{scene.endState}</p>
+                <p className="muted">{scene.causalEvidence}</p>
+              </div>
+            ))}
+            {(development.preview.risks.length > 0 ||
+              development.preview.openQuestions.length > 0) && (
+              <div className="warning-box">
+                <strong>아직 결정이 필요한 부분</strong>
+                {[
+                  ...development.preview.risks,
+                  ...development.preview.openQuestions,
+                ].map((text: string, i: number) => (
+                  <p key={i}>{text}</p>
+                ))}
+              </div>
+            )}
+            {development.preview.continuationNotes?.length > 0 && (
+              <div className="info-note">
+                <div>
+                  <strong>이후 전개 메모</strong>
+                  {development.preview.continuationNotes.map(
+                    (text: string, i: number) => (
+                      <p key={i}>{text}</p>
+                    ),
+                  )}
+                </div>
+              </div>
+            )}
+            <p className="muted">
+              반영하면 플롯이 검토 대기 상태로 저장됩니다. 원문과 기획 트리는
+              유지되며, 집필은 플롯 승인 후 시작합니다.
+            </p>
+            {developmentError && <p role="alert">{developmentError}</p>}
+            <div className="button-row">
+              <Button
+                disabled={busy || development.inputRevision !== p.revision}
+                onClick={() =>
+                  run(async () => {
+                    setDevelopmentError("");
+                    try {
+                      await action("/plot/develop/apply", {
+                        revision: p.revision,
+                        proposalId: development.id,
+                        confirmed: true,
+                      });
+                    } catch (error) {
+                      setDevelopmentError(
+                        error instanceof Error
+                          ? error.message
+                          : "전개안을 저장하지 못했습니다.",
+                      );
+                      throw error;
+                    }
+                    setDevelopment(null);
+                    setPlotConfirm(false);
+                    notify(
+                      "자동 전개를 반영했습니다. 장면을 확인한 뒤 플롯을 승인하세요.",
+                    );
+                  })
+                }
+              >
+                이 전개 반영
+              </Button>
+              <Button
+                disabled={busy}
+                variant="secondary"
+                onClick={() => setDevelopment(null)}
+              >
+                기존 플롯 유지
+              </Button>
+            </div>
+            {development.inputRevision !== p.revision && (
+              <p role="alert">
+                기획이나 플롯이 바뀌었습니다. 닫은 뒤 최신 플롯에서 다시
+                실행해주세요.
+              </p>
+            )}
           </div>
         </Modal>
       )}
