@@ -11,25 +11,26 @@ import {
   Link2,
   Save,
   History,
-  BookOpen,
+  ArrowRight,
 } from "lucide-react";
 import { api, send, date } from "@/lib/api";
 import {
   renderReferences,
   branchLabels,
   type TreeRecord,
+  planningWarnings,
 } from "@/lib/planning-tree";
 import { useActions, Modal, Badge } from "./workspace";
 import { Button } from "./ui/button";
 export default function PlanningTree({
   project,
   onUpdate,
-  openDocuments,
+  onContinue,
   initialNode = "root",
 }: {
   project: any;
   onUpdate: (p: any) => Promise<void>;
-  openDocuments: () => void;
+  onContinue: () => void;
   initialNode?: string;
 }) {
   const { run, busy, askAI, notify } = useActions();
@@ -40,6 +41,7 @@ export default function PlanningTree({
     [proposal, setProposal] = useState<any>(null),
     [names, setNames] = useState<Record<string, string>>({}),
     [nameError, setNameError] = useState(""),
+    [planningConfirmed, setPlanningConfirmed] = useState(false),
     [rename, setRename] = useState<{
       entityId: string;
       original: string;
@@ -52,6 +54,7 @@ export default function PlanningTree({
   useEffect(() => {
     let active = true;
     setNames({});
+    setPlanningConfirmed(false);
     api(base + "/tree")
       .then((t) => {
         if (active) setTree(t);
@@ -117,6 +120,9 @@ export default function PlanningTree({
     );
   const node = tree.nodes.find((n: any) => n.id === selected) ?? tree.nodes[0];
   const entities: TreeRecord[] = tree.entities;
+  const warnings = planningWarnings(project, tree);
+  const approved =
+    project.status === "ACTIVE" && project.planningMode === "tree";
   const relatedEntities = entities.filter(
     (e) =>
       node.entityIds.includes(e.id) ||
@@ -225,7 +231,7 @@ export default function PlanningTree({
         </div>
         <div>
           <strong>03 연결 검수</strong>
-          <span>미정 해결 · 상세 문서 · 승인</span>
+          <span>현재 기획 확인 · 다음 단계</span>
         </div>
       </div>
       {!tree.foundationReady && (
@@ -234,8 +240,7 @@ export default function PlanningTree({
             <h3>먼저 작품의 큰 틀을 함께 잡으세요</h3>
             <p>
               세계관의 제약, 인물의 목표, 이야기의 갈등을 한 번에 연결합니다.
-              기존 {Object.keys(project.bible ?? {}).length}개 모듈과 원문은
-              보존됩니다.
+              기존에 작성한 자료와 원문은 보존됩니다.
             </p>
           </div>
           <Button
@@ -429,8 +434,7 @@ export default function PlanningTree({
               공통 인물 · 장소 · 세력
             </h3>
             <p className="muted">
-              바꾸기를 누르면 기획 트리·인물 설명·상세 기획서의 이름을 함께
-              갱신합니다.
+              바꾸기를 누르면 기획 트리·인물 설명의 이름을 함께 갱신합니다.
             </p>
           </div>
           <Badge>{entities.length}개</Badge>
@@ -480,15 +484,61 @@ export default function PlanningTree({
       </section>
       <div className="panel planning-document-link">
         <div>
-          <h3>분야별 상세 문서와 최종 검수</h3>
+          <h3>
+            {approved
+              ? "다음 이야기를 설계할 준비가 됐습니다"
+              : "이 정도 기획이면 시작해도 좋아요"}
+          </h3>
           <p className="muted">
-            공통 기획을 바탕으로 11개 문서를 정리하고 문체·독립 검토·등록 승인을
-            진행합니다.
+            모든 가지를 완성할 필요는 없습니다. 큰 방향이 마음에 들면 현재
+            기획을 승인하고 스토리 설계로 넘어가세요. 문체는 트리의 문체 · 연출
+            가지를 사용하며, 이후에도 기획을 다듬을 수 있습니다.
           </p>
+          {warnings.length > 0 && (
+            <div className="info-note">
+              <div>
+                <strong>이어갈 기획 메모</strong>
+                <ul>
+                  {warnings.map((warning) => (
+                    <li key={warning}>{warning}</li>
+                  ))}
+                </ul>
+                <p>남은 항목은 지우지 않고 다음 단계의 기획에도 전달합니다.</p>
+              </div>
+            </div>
+          )}
+          {!approved && (
+            <label className="checkbox">
+              <input
+                type="checkbox"
+                checked={planningConfirmed}
+                disabled={busy || !tree.foundationReady}
+                onChange={(event) => setPlanningConfirmed(event.target.checked)}
+              />
+              현재 기획을 확인했으며, 남은 미정은 진행하면서 구체화하겠습니다.
+            </label>
+          )}
         </div>
-        <Button variant="secondary" onClick={openDocuments}>
-          <BookOpen size={16} />
-          상세 모듈 보기
+        <Button
+          disabled={
+            busy || !tree.foundationReady || (!approved && !planningConfirmed)
+          }
+          onClick={() =>
+            run(async () => {
+              if (!approved)
+                await update(
+                  await send(base + "/tree/approve", {
+                    revision: project.revision,
+                    confirmed: planningConfirmed,
+                  }),
+                );
+              onContinue();
+              notify("현재 트리 기획으로 스토리 설계를 시작합니다.");
+            })
+          }
+        >
+          <ArrowRight size={16} />
+          {approved ? "스토리 설계로 이동" : "이 기획으로 다음 단계"}
         </Button>
       </div>
       {rename && (

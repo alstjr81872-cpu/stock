@@ -1,4 +1,5 @@
 import { Store, type Operation } from "./store";
+import { planningCarryover } from "../lib/planning-tree";
 import { proposePlanning, applyPlanning } from "./planning";
 import {
   seedTree,
@@ -6,6 +7,7 @@ import {
   applyTree,
   renameEntity,
   suggestEntityName,
+  approveTree,
   syncModuleTree,
 } from "./tree";
 import {
@@ -109,8 +111,10 @@ async function compile(s: Store, p: Doc, sceneId: string) {
       L2: p.styleBinding.snapshot,
       L3: {
         requirements: p.requirements,
-        bible: p.bible,
+        bible: p.planningMode === "tree" ? {} : p.bible,
         common_planning_tree: p.planningTree ?? null,
+        pending_planning:
+          p.planningMode === "tree" ? planningCarryover(p) : null,
         planning_decisions: p.planningDecisions ?? [],
         character_names: p.characterNames ?? [],
         canonVersion: p.canonVersion,
@@ -656,6 +660,8 @@ export async function handleApi(request: Request, s: Store): Promise<unknown> {
       return proposeTree(s, p, "root", body, true);
     if (action === "tree/apply" && method === "POST")
       return applyTree(s, p, body);
+    if (action === "tree/approve" && method === "POST")
+      return approveTree(s, p, body);
     if (
       parts[2] === "tree" &&
       parts[3] === "nodes" &&
@@ -852,6 +858,7 @@ export async function handleApi(request: Request, s: Store): Promise<unknown> {
       });
     }
     if (action === "approve" && method === "POST") {
+      if (p.planningTree) return approveTree(s, p, body);
       parsed("Confirm");
       revision(p, body.revision);
       check(
@@ -942,7 +949,9 @@ export async function handleApi(request: Request, s: Store): Promise<unknown> {
         s,
         "plot",
         {
-          approved_bible: p.bible,
+          approved_bible: p.planningMode === "tree" ? {} : p.bible,
+          pending_planning:
+            p.planningMode === "tree" ? planningCarryover(p) : null,
           common_planning_tree: p.planningTree ?? null,
           planning_decisions: p.planningDecisions ?? [],
           character_names: p.characterNames ?? [],
@@ -1160,7 +1169,9 @@ export async function handleApi(request: Request, s: Store): Promise<unknown> {
         "review",
         {
           content: ch.content,
-          approved_bible: p.bible,
+          approved_bible: p.planningMode === "tree" ? {} : p.bible,
+          pending_planning:
+            p.planningMode === "tree" ? planningCarryover(p) : null,
           common_planning_tree: p.planningTree ?? null,
           planning_decisions: p.planningDecisions ?? [],
           character_names: p.characterNames ?? [],

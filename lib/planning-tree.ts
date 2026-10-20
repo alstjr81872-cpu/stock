@@ -97,3 +97,44 @@ export const moduleLabels: Record<string, string> = {
   special: "장면별 연출",
   serial: "연재 운영",
 };
+
+export function planningWarnings(
+  project: TreeRecord,
+  tree: TreeRecord,
+): string[] {
+  const warnings: string[] = [];
+  const open = (tree.issues ?? []).filter(
+    (i: TreeRecord) => i.status === "open",
+  ).length;
+  const review = tree.nodes.filter(
+    (n: TreeRecord) => n.status === "needsReview",
+  ).length;
+  const mapped = new Set(
+    tree.nodes.flatMap((n: TreeRecord) => n.requirementIds ?? []),
+  );
+  const missing = (project.requirements ?? []).filter(
+    (r: TreeRecord) => !mapped.has(r.id),
+  ).length;
+  const questions = (project.analysis?.questions ?? []).filter(
+    (q: TreeRecord) => q.blocks_stage && !project.answers?.[q.id]?.trim(),
+  ).length;
+  const conflicts = project.analysis?.conflicts?.length ?? 0;
+  if (open) warnings.push(`기획의 미정·충돌 ${open}개`);
+  if (review) warnings.push(`변경 영향 검토 ${review}개 가지`);
+  if (missing) warnings.push(`아직 연결하지 않은 원문 요구 ${missing}개`);
+  if (questions) warnings.push(`아직 답하지 않은 인터뷰 질문 ${questions}개`);
+  if (conflicts) warnings.push(`원문 분석에서 확인한 충돌 ${conflicts}개`);
+  return warnings;
+}
+
+export function planningCarryover(project: TreeRecord) {
+  return {
+    notices: project.treeApproval?.warnings ?? [],
+    sourceConflicts: project.analysis?.conflicts ?? [],
+    unansweredQuestions: (project.analysis?.questions ?? []).filter(
+      (q: TreeRecord) =>
+        !project.answers?.[q.id]?.trim() ||
+        /^(미정|보류|pending|hold)$/i.test(project.answers[q.id].trim()),
+    ),
+  };
+}

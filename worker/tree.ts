@@ -6,6 +6,8 @@ import {
   revision,
   requireThat as check,
   invalidate,
+  bytes,
+  hash,
 } from "./shared";
 import { validate } from "./validation";
 import { generate } from "./ai";
@@ -17,6 +19,7 @@ import {
   descendants,
   renderReferences,
   replaceEntityName,
+  planningWarnings,
 } from "../lib/planning-tree";
 export function seedTree(p: Doc): Doc {
   if (p.planningTree) {
@@ -460,6 +463,95 @@ export async function applyTree(s: Store, p: Doc, body: Doc) {
   ]);
   return op.data;
 }
+export async function approveTree(s: Store, p: Doc, body: Doc) {
+  validate("Confirm", body);
+  revision(p, body.revision);
+  check(
+    body.confirmed,
+    "현재 트리 기획서로 다음 단계를 진행할지 확인해주세요.",
+    422,
+  );
+  const tree = seedTree(p);
+  check(
+    tree.foundationReady &&
+      ["root", "world", "characters", "story"].every((key) =>
+        tree.nodes.some(
+          (n: Doc) => n.id === key && n.content.trim().length >= 10,
+        ),
+      ),
+    "작품·세계관·인물·스토리의 큰 틀을 먼저 잡아주세요.",
+    422,
+  );
+  if (p.status === "ACTIVE" && p.planningMode === "tree") return p;
+  const next = structuredClone(p),
+    warnings = planningWarnings(p, tree);
+  invalidate(next);
+  next.canonVersion = (p.canonVersion ?? 0) + 1;
+  next.status = "ACTIVE";
+  next.planningMode = "tree";
+  next.approvedAt = now();
+  next.planningTree = tree;
+  for (const node of tree.nodes) node.status = "ready";
+  next.treeApproval = {
+    approvedAt: next.approvedAt,
+    inputRevision: p.revision,
+    warnings,
+    canonVersion: next.canonVersion,
+  };
+  // The approved tree is the source of truth, including style. Keep the old
+  // library selection as migration data without making it a prerequisite.
+  if (p.styleBinding && p.styleBinding.source !== "tree")
+    next.legacyStyleBinding ??= p.styleBinding;
+  {
+    const style = tree.nodes.find((n: Doc) => n.id === "style");
+    const snapshot = {
+      id: "tree-style",
+      name: "기획 트리의 문체 · 연출",
+      profileVersion: next.canonVersion,
+      rules: {
+        guidance: renderReferences(
+          style?.content ??
+            "기획의 분위기와 인물의 시점을 따라 자연스러운 한국어로 쓴다.",
+          tree.entities,
+        ),
+      },
+      selectedVariant: null,
+    };
+    next.styleBinding = {
+      source: "tree",
+      styleId: "tree-style",
+      pinnedVersion: next.canonVersion,
+      snapshot,
+      hash: await hash(JSON.stringify(snapshot)),
+    };
+  }
+  const mapped = new Set(tree.nodes.flatMap((n: Doc) => n.requirementIds));
+  for (const req of next.requirements ?? []) req.approved = mapped.has(req.id);
+  const snapshot = await s.put(
+    `users/${s.uid}/projects/${p.id}/bible-versions/${id()}.json`,
+    bytes(JSON.stringify(next)),
+    "application/json",
+  );
+  next.bibleSnapshot = snapshot;
+  const op = s.prepare("projects/" + p.id, next, p.revision),
+    key = id();
+  await s.commit([
+    op,
+    s.prepare(`projects/${p.id}/approval_records/${key}`, {
+      id: key,
+      kind: "BIBLE",
+      planningMode: "tree",
+      canonVersion: next.canonVersion,
+      styleVersion: next.styleBinding.pinnedVersion,
+      approvedAt: next.approvedAt,
+      inputRevision: p.revision,
+      warnings,
+      snapshot,
+    }),
+  ]);
+  return op.data;
+}
+
 export async function suggestEntityName(
   s: Store,
   p: Doc,

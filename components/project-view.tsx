@@ -46,9 +46,7 @@ export default function ProjectView({
     [jsonPlot, setJsonPlot] = useState<string | null>(null),
     [prompt, setPrompt] = useState<any>(null),
     [analysisEdit, setAnalysisEdit] = useState<string | null>(null),
-    [planningProposal, setPlanningProposal] = useState<any>(null),
-    [showLegacy, setShowLegacy] = useState(false),
-    [treeSelection, setTreeSelection] = useState("root");
+    [planningProposal, setPlanningProposal] = useState<any>(null);
   async function load() {
     const data = await api("/projects/" + id);
     setP(data);
@@ -355,34 +353,18 @@ export default function ProjectView({
               </section>
             </div>
           )}
-          {tab === "bible" && mode === "supabase" && !showLegacy && (
+          {tab === "bible" && mode === "supabase" && (
             <PlanningTree
               project={p}
-              initialNode={treeSelection}
               onUpdate={async (result) => {
                 setP(result);
                 await refresh();
               }}
-              openDocuments={() => setShowLegacy(true)}
+              onContinue={() => setTab("plot")}
             />
           )}
-          {tab === "bible" && (mode !== "supabase" || showLegacy) && (
+          {tab === "bible" && mode !== "supabase" && (
             <>
-              {mode === "supabase" && (
-                <div className="button-row">
-                  <Button
-                    variant="secondary"
-                    onClick={() => setShowLegacy(false)}
-                  >
-                    <GitBranch size={16} />
-                    공통 기획 트리로
-                  </Button>
-                  <p className="muted">
-                    기존 문서는 보존되어 있습니다. 트리를 구체화한 뒤 분야별
-                    문서로 정리하세요.
-                  </p>
-                </div>
-              )}
               <div className="bible-top">
                 <div>
                   <h2>한 세계의 설계도</h2>
@@ -421,12 +403,7 @@ export default function ProjectView({
                     <Button
                       size="sm"
                       variant="secondary"
-                      disabled={
-                        busy ||
-                        !p.analysis ||
-                        (mode === "supabase" &&
-                          !p.planningTree?.foundationReady)
-                      }
+                      disabled={busy || !p.analysis}
                       onClick={() =>
                         run(() =>
                           generate(
@@ -446,20 +423,6 @@ export default function ProjectView({
                       value={p.bible[section]}
                       requirements={p.requirements}
                       onAutoPlan={async (value, focus) => {
-                        if (mode === "supabase") {
-                          await action(
-                            "/sections/" + section,
-                            { revision: p.revision, section: value },
-                            "PUT",
-                          );
-                          setTreeSelection("module-" + section);
-                          setShowLegacy(false);
-                          notify(
-                            "현재 편집을 보존했습니다. 공통 기획 트리에서 이 가지를 구체화하세요.",
-                          );
-                          return;
-                        }
-
                         const max = await askAI(
                           "미정·설정 충돌을 자동 기획하고 인물 이름·배경을 구체화합니다. 현재 편집 내용, 원문 요구, 인터뷰, 기획 모듈과 문체 정보를 전송합니다. 관련 모듈의 수정안도 함께 제안합니다.",
                           {
@@ -720,7 +683,9 @@ export default function ProjectView({
               {p.status !== "ACTIVE" && (
                 <div className="info-note">
                   <Info size={18} />
-                  먼저 작품 기획서와 문체를 승인해 작품을 등록하세요.
+                  {mode === "supabase"
+                    ? "STEP 2에서 현재 트리 기획을 확인하고 다음 단계로 진행해주세요."
+                    : "먼저 작품 기획서와 문체를 승인해 작품을 등록하세요."}
                 </div>
               )}
               {!p.plot ? (

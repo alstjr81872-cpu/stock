@@ -9,6 +9,7 @@ import { authenticate } from "../../worker/index";
 import { validate } from "../../worker/validation";
 import fixtures from "./fixtures.json";
 import { generate, settleUsage } from "../../worker/ai";
+import { seedTree } from "../../worker/tree";
 const uid = "11111111-1111-4111-8111-111111111111",
   other = "22222222-2222-4222-8222-222222222222";
 const env: any = {
@@ -1199,6 +1200,152 @@ test("name suggestion is quoted before payment and explicit rename updates plann
       ),
       (e: any) => e.status === 422,
     );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("tree approval proceeds with unfinished branches and no legacy modules or style library, through plot and writing context", async () => {
+  const s = store(),
+    pid = "tree-only",
+    originalFetch = globalThis.fetch;
+  let p = await s.create(`projects/${pid}`, {
+    title: "트리만으로 시작하는 작품",
+    status: "BIBLE_REVIEW",
+    canonVersion: 0,
+    brief: { text: "원문 요구를 보존한다." },
+    requirements: [{ id: "R001", text: "원문 요구를 보존한다." }],
+    analysis: { questions: [], conflicts: [] },
+    answers: {},
+    bible: {},
+    styleBinding: null,
+  });
+  await assert.rejects(
+    handleApi(
+      req(`/projects/${pid}/tree/approve`, {
+        revision: p.revision,
+        confirmed: true,
+      }),
+      s,
+    ),
+    (e: any) => e.status === 422,
+  );
+  const tree = seedTree(p);
+  tree.foundationReady = true;
+  tree.nodes[2].status = "needsReview";
+  tree.issues.push({
+    id: "later",
+    title: "이후의 전개",
+    detail: "중반의 사건은 집필하면서 구체화한다.",
+    nodeIds: ["story"],
+    entityIds: [],
+    status: "open",
+    resolution: "",
+  });
+  p = await s.change(`projects/${pid}`, p.revision, (d) => {
+    d.planningTree = tree;
+  });
+  await assert.rejects(
+    handleApi(
+      req(`/projects/${pid}/tree/approve`, {
+        revision: p.revision,
+        confirmed: false,
+      }),
+      s,
+    ),
+    (e: any) => e.status === 422,
+  );
+  const beforeRevision = p.revision;
+  p = (await handleApi(
+    req(`/projects/${pid}/tree/approve`, {
+      revision: p.revision,
+      confirmed: true,
+    }),
+    s,
+  )) as any;
+  assert.equal(p.status, "ACTIVE");
+  assert.equal(p.planningMode, "tree");
+  assert.deepEqual(p.bible, {});
+  assert.equal(p.bibleAudit, undefined);
+  assert.equal(p.styleBinding.source, "tree");
+  assert.equal(p.styleBinding.pinnedVersion, 1);
+  assert.equal(p.planningTree.issues[0].status, "open");
+  assert(p.treeApproval.warnings.some((w: string) => w.includes("미정")));
+  assert(p.treeApproval.warnings.some((w: string) => w.includes("원문 요구")));
+  assert.equal(p.brief.text, "원문 요구를 보존한다.");
+  assert.equal((await s.list(`projects/${pid}/approval_records`)).length, 1);
+  assert((await s.read(p.bibleSnapshot)).length > 0);
+  await assert.rejects(
+    handleApi(
+      req(`/projects/${pid}/tree/approve`, {
+        revision: beforeRevision,
+        confirmed: true,
+      }),
+      s,
+    ),
+    (e: any) => e.status === 409,
+  );
+  const account = await s.get("account");
+  await s.change("account", account.revision, (d) => {
+    d.rate = {};
+  });
+  let paid = 0;
+  globalThis.fetch = async (_url, init) => {
+    paid++;
+    const requestBody = JSON.parse(init!.body as string);
+    assert(
+      JSON.stringify(requestBody).includes(
+        "중반의 사건은 집필하면서 구체화한다.",
+      ),
+    );
+    return Response.json({
+      choices: [
+        {
+          finish_reason: "stop",
+          message: { content: JSON.stringify(fixtures.plot) },
+        },
+      ],
+      usage: { cost: 0 },
+    });
+  };
+  try {
+    p = (await handleApi(
+      req(`/projects/${pid}/plot/generate`, {
+        revision: p.revision,
+        consent: true,
+        maxCostUsd: 1,
+      }),
+      s,
+    )) as any;
+    p = (await handleApi(
+      req(`/projects/${pid}/plot/approve`, {
+        revision: p.revision,
+        confirmed: true,
+      }),
+      s,
+    )) as any;
+    const compiled: any = await handleApi(req(`/projects/${pid}/prompt/s1`), s);
+    assert.equal(paid, 1);
+    assert.equal(compiled.layers.L2.name, "기획 트리의 문체 · 연출");
+    assert.equal(compiled.layers.L3.common_planning_tree.issues[0].id, "later");
+    assert.deepEqual(compiled.layers.L3.bible, {});
+    p = await s.change(`projects/${pid}`, p.revision, (d) => {
+      d.status = "BIBLE_REVIEW";
+      d.planningTree.nodes[4].content =
+        "다듬은 문체로 인물의 감각을 따라 쓰고 과장된 수사를 줄인다.";
+    });
+    p = (await handleApi(
+      req(`/projects/${pid}/approve`, {
+        revision: p.revision,
+        confirmed: true,
+      }),
+      s,
+    )) as any;
+    assert.equal(p.canonVersion, 2);
+    assert.equal(p.styleBinding.pinnedVersion, 2);
+    assert(p.styleBinding.snapshot.rules.guidance.includes("다듬은 문체"));
+    assert.equal(p.plot.status, "INVALIDATED");
+    assert.equal(p.planningTree.issues[0].status, "open");
   } finally {
     globalThis.fetch = originalFetch;
   }

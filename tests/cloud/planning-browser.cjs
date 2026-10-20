@@ -253,6 +253,15 @@ const fixtures = require("./fixtures.json");
         applies++;
         p = { ...p, revision: p.revision + 1, planningTree: pending.preview };
         data = p;
+      } else if (path.endsWith("/tree/approve")) {
+        assert.equal(request.postDataJSON().confirmed, true);
+        p = {
+          ...p,
+          revision: p.revision + 1,
+          status: "ACTIVE",
+          planningMode: "tree",
+        };
+        data = p;
       } else if (path.endsWith("/tree/entities/person_main")) {
         const tree = seedTree(p);
         tree.entities[0].name = request.postDataJSON().name;
@@ -376,6 +385,36 @@ const fixtures = require("./fixtures.json");
       .waitFor();
     assert.equal(generations, 2);
     assert.equal(applies, 2);
+    assert.equal(
+      await page
+        .getByRole("button", { name: "상세 모듈 보기", exact: true })
+        .count(),
+      0,
+    );
+    const nextStep = page.getByRole("button", {
+      name: "이 기획으로 다음 단계",
+      exact: true,
+    });
+    assert(await nextStep.isDisabled());
+    await page
+      .getByRole("checkbox", {
+        name: "현재 기획을 확인했으며, 남은 미정은 진행하면서 구체화하겠습니다.",
+      })
+      .check();
+    await nextStep.click();
+    await page
+      .getByRole("button", { name: "첫 회차 설계", exact: true })
+      .waitFor();
+    assert(
+      await page
+        .getByRole("button", { name: "첫 회차 설계", exact: true })
+        .isEnabled(),
+    );
+    assert.equal(p.planningTree.issues[0].status, "open");
+    await page.getByRole("button", { name: /STEP 02/ }).click();
+    await page
+      .getByRole("button", { name: "스토리 설계로 이동", exact: true })
+      .waitFor();
     for (const width of [1440, 768, 390, 320]) {
       await page.setViewportSize({ width, height: 1000 });
       assert.equal(
