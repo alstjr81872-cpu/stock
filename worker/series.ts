@@ -9,7 +9,7 @@ import {
 } from "./shared";
 import { validate } from "./validation";
 import { generate } from "./ai";
-import { validateStoryBatch } from "./story-ledger";
+import { validateStoryBatch, storyContext } from "./story-ledger";
 export const episodeNumber = (p: Doc) => p.currentEpisode ?? 1;
 export const chapterId = (p: Doc, number = episodeNumber(p)) =>
   `${p.storyRevision ? `story-${p.storyRevision}-` : ""}chapter-${number}`;
@@ -127,7 +127,8 @@ export async function proposeSynopsis(s: Store, p: Doc, body: Doc) {
       targetChars: p.defaultTargetChars ?? p.targetChars ?? 5000,
       common_planning_tree:
         p.planningMode === "launch" ? null : (p.planningTree ?? null),
-      launch_plan: p.launchPlan ?? null,
+      launch_plan: p.chatPlan ?? p.launchPlan ?? null,
+      story: storyContext(p),
       foreshadowing: p.foreshadowing ?? [],
       worldFacts: p.storyFacts ?? [],
       requirements: p.requirements,

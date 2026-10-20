@@ -26,7 +26,7 @@ import { api, send, modules, statuses, date, download } from "@/lib/api";
 import { Badge, Empty, Modal, useActions } from "./workspace";
 import { Button } from "./ui/button";
 import WritingRoom from "./writing-room";
-import LaunchPlanning from "./launch-planning";
+import StoryAssistant from "./story-assistant";
 import SeriesPlanner from "./series-planner";
 export default function ProjectView({
   id,
@@ -146,7 +146,7 @@ export default function ProjectView({
   const steps =
     mode === "supabase"
       ? [
-          { key: "brief", title: "파일 · 기획안", icon: FileText },
+          { key: "brief", title: "기획 채팅 · 설정집", icon: FileText },
           { key: "plot", title: "10화 시놉시스", icon: GitBranch },
           { key: "writing", title: "집필", icon: Feather },
         ]
@@ -264,7 +264,7 @@ export default function ProjectView({
             ))}
           </div>
           {tab === "brief" && mode === "supabase" && (
-            <LaunchPlanning
+            <StoryAssistant
               project={p}
               onUpdate={async (data) => {
                 setP(data);
@@ -728,21 +728,19 @@ export default function ProjectView({
               </div>
             </>
           )}
-          {mode === "supabase" &&
-            p.status === "ACTIVE" &&
-            ["plot", "writing"].includes(tab) && (
-              <SeriesPlanner
-                project={p}
-                autoStart={startSynopsis}
-                onAutoStarted={() => setStartSynopsis(false)}
-                onUpdate={async (data) => {
-                  setP(data);
-                  await refresh();
-                }}
-                beforeSelect={canLeave}
-                onSelected={() => setTab("plot")}
-              />
-            )}
+          {mode === "supabase" && p.status === "ACTIVE" && tab === "plot" && (
+            <SeriesPlanner
+              project={p}
+              autoStart={startSynopsis}
+              onAutoStarted={() => setStartSynopsis(false)}
+              onUpdate={async (data) => {
+                setP(data);
+                await refresh();
+              }}
+              beforeSelect={canLeave}
+              onSelected={() => setTab("plot")}
+            />
+          )}
           {tab === "plot" && (
             <>
               {developmentPhase && (
@@ -983,6 +981,10 @@ export default function ProjectView({
               key={`${p.storyRevision ?? 0}:${p.currentEpisode ?? 1}`}
               project={p}
               reloadProject={load}
+              onProjectUpdate={async (data) => {
+                setP(data);
+                await refresh();
+              }}
               onNext={mode === "supabase" ? nextEpisode : undefined}
             />
           )}

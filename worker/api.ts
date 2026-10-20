@@ -47,6 +47,15 @@ import { generate, catalog, defaults, ROLES } from "./ai";
 import { validate } from "./validation";
 import { proposeLaunch, applyLaunch, draftLaunch } from "./launch";
 import {
+  startChat,
+  messageChat,
+  chatHistory,
+  attachChatFile,
+  editCanon,
+  activateChatPlan,
+  applyChatEdits,
+} from "./assistant";
+import {
   storyContext,
   checkPlotSeeds,
   confirmStoryBeats,
@@ -71,10 +80,12 @@ async function updateChapter(
   allowLocked = false,
   expectedProject?: number,
   extras: Operation[] = [],
+  guardedProject?: number,
 ) {
   const p = await s.get(projectPath(pid));
+  if (guardedProject !== undefined) revision(p, guardedProject);
   check(
-    (ch.number ?? 1) === episodeNumber(p),
+    (ch.number ?? 1) === episodeNumber(p) && ch.id === chapterId(p),
     "선택한 회차가 변경됐습니다. 원고를 다시 불러와주세요.",
     409,
   );
@@ -304,11 +315,19 @@ export async function handleApi(request: Request, s: Store): Promise<unknown> {
         ].map((k) => [k, p[k]]),
       ),
     );
+  if (path === "/projects/chat-start" && method === "POST")
+    return startChat(s, body);
   if (path === "/projects" && method === "POST") {
     const form = await request.formData(),
       file = form.get("file"),
       title = form.get("title"),
       genre = String(form.get("genre") ?? "미정");
+    const chatSeed = String(form.get("idea") ?? "");
+    check(
+      length(chatSeed) <= 12000,
+      "시작 아이디어는 12,000자 이하로 입력해주세요.",
+      413,
+    );
     check(
       typeof title === "string" && title.trim() && length(title) <= 100,
       "작품 제목은 1~100자여야 합니다.",
@@ -361,6 +380,9 @@ export async function handleApi(request: Request, s: Store): Promise<unknown> {
       id: pid,
       title: title.trim(),
       genre: genre.slice(0, 100),
+      chatSeed:
+        chatSeed.trim() ||
+        "올린 파일을 바탕으로 함께 기획해줘. 핵심 질문부터 시작하자.",
       status: "IDEA",
       canonVersion: 0,
       brief,
@@ -621,6 +643,9 @@ export async function handleApi(request: Request, s: Store): Promise<unknown> {
         "episode_plans",
         "launch_proposals",
         "launch_history",
+        "chat_turns",
+        "chat_files",
+        "canon_history",
       ])
         subcollections[name] = await s.list(`${pp}/${name}`);
       files["project.json"] = bytes(
@@ -661,6 +686,77 @@ export async function handleApi(request: Request, s: Store): Promise<unknown> {
     }
     // All other project operations require a live, owned project.
     const p = await s.get(pp);
+    if (action === "assistant/history" && method === "GET")
+      return chatHistory(
+        s,
+        p,
+        url.searchParams.has("before")
+          ? Number(url.searchParams.get("before"))
+          : undefined,
+      );
+    if (action === "assistant/message" && method === "POST")
+      return messageChat(s, p, body);
+    if (action === "assistant/file" && method === "POST")
+      return attachChatFile(s, p, await request.formData());
+    if (action === "assistant/canon" && method === "POST")
+      return editCanon(s, p, body);
+    if (action === "assistant/activate" && method === "POST")
+      return activateChatPlan(s, p, body);
+    if (action === "assistant/edits/apply" && method === "POST") {
+      parsed("ChatApply");
+      revision(p, body.revision);
+      check(
+        body.confirmed &&
+          body.storyRevision === (p.storyRevision ?? 0) &&
+          body.episode === episodeNumber(p),
+        "연재 버전과 회차를 확인해주세요.",
+        409,
+      );
+      const ch = await chapter(s, p);
+      revision(ch, body.chapterRevision);
+      check(!approved(ch), "확정 원고는 새 초안으로 분기해 편집하세요.", 409);
+      const path = `${pp}/chat_turns/${body.turnId}`,
+        turn = await s.get(path),
+        prop = turn.editProposal;
+      check(
+        prop &&
+          prop.status === "PROPOSED" &&
+          prop.chapterId === ch.id &&
+          prop.inputRevision === ch.revision &&
+          prop.inputHash === ch.contentHash &&
+          (prop.conversationVersion ?? 0) === (p.conversationVersion ?? 0),
+        "수정 제안 이후 원고 또는 설정이 바뀌었습니다. 다시 요청해주세요.",
+        409,
+      );
+      const fields = await s.content(
+        pid,
+        applyChatEdits(ch.content, prop.edits),
+      );
+      return updateChapter(
+        s,
+        pid,
+        ch,
+        { ...fields, review: null, status: "REQUIRES_HUMAN" },
+        false,
+        undefined,
+        [
+          await s.archive(pid, ch),
+          s.prepare(
+            path,
+            {
+              ...turn,
+              editProposal: {
+                ...prop,
+                status: "APPLIED",
+                outputHash: fields.contentHash,
+              },
+            },
+            turn.revision,
+          ),
+        ],
+        p.revision,
+      );
+    }
     if (action === "launch/generate" && method === "POST")
       return proposeLaunch(s, p, body);
     if (action === "launch/apply" && method === "POST")
@@ -1324,7 +1420,11 @@ export async function handleApi(request: Request, s: Store): Promise<unknown> {
         f.start = length(ch.content.slice(0, start));
         f.end = f.start + length(f.quote);
       }
-      Object.assign(result, { run, contentHash: ch.contentHash });
+      Object.assign(result, {
+        run,
+        contentHash: ch.contentHash,
+        conversationVersion: p.conversationVersion ?? 0,
+      });
       return updateChapter(
         s,
         pid,
@@ -1336,6 +1436,7 @@ export async function handleApi(request: Request, s: Store): Promise<unknown> {
         false,
         undefined,
         [s.prepare(`${pp}/reviews/${run.requestId}`, result)],
+        p.revision,
       );
     }
     if (action === "chapter/rewrite" && method === "POST") {
@@ -1371,6 +1472,7 @@ export async function handleApi(request: Request, s: Store): Promise<unknown> {
       );
       return s.create(`${pp}/revision_runs/${run.requestId}`, {
         ...result,
+        conversationVersion: p.conversationVersion ?? 0,
         chapterId: ch.id,
         inputHash: ch.contentHash,
         inputRevision: ch.revision,
@@ -1390,6 +1492,7 @@ export async function handleApi(request: Request, s: Store): Promise<unknown> {
         (prop.chapterId ?? "chapter-1") === ch.id &&
           prop.inputHash === ch.contentHash &&
           prop.inputRevision === ch.revision &&
+          (prop.conversationVersion ?? 0) === (p.conversationVersion ?? 0) &&
           prop.status === "PROPOSED",
         "수정 제안 이후 원고가 바뀌었습니다. 다시 검토하세요.",
       );
@@ -1413,6 +1516,7 @@ export async function handleApi(request: Request, s: Store): Promise<unknown> {
             prop.revision,
           ),
         ],
+        p.revision,
       );
     }
     if (action === "chapter/approve" && method === "POST") {
@@ -1426,7 +1530,9 @@ export async function handleApi(request: Request, s: Store): Promise<unknown> {
         "원고를 직접 검수하고 명시 승인하세요.",
       );
       check(
-        ch.review?.contentHash === ch.contentHash,
+        ch.review?.contentHash === ch.contentHash &&
+          (ch.review?.conversationVersion ?? 0) ===
+            (p.conversationVersion ?? 0),
         "현재 원고에 대한 독립 검토가 필요합니다.",
       );
       check(

@@ -15,6 +15,8 @@ const taskNames: Record<string, string> = {
   plot_develop_check: "전개 누락·모호함 점검",
   synopsis: "10화 시놉시스 설계",
   launch_plan: "파일 기반 기획안",
+  chat_plan: "기획 대화",
+  chat_write: "집필 어시스턴트 대화",
   write: "집필",
   review: "원고 검토",
   rewrite: "부분 수정",

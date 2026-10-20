@@ -222,6 +222,58 @@ class ApplyLaunch(Confirm):
     plan: LaunchPlan
 
 
+class ChatStart(Strict):
+    title: str = Field(default='새로운 이야기', min_length=1, max_length=100)
+    genre: str = Field(default='대화로 정하기', max_length=100)
+    idea: str = Field(min_length=1, max_length=12000)
+
+
+class ChatRequest(AIRequest):
+    message: str = Field(min_length=1, max_length=12000)
+    mode: Literal['planning', 'writing'] = 'planning'
+    storyRevision: int = Field(default=0, ge=0)
+    episode: int = Field(default=1, ge=1)
+    chapterRevision: int | None = None
+
+
+class CanonChange(Strict):
+    id: str = Field(pattern=r'^[A-Za-z0-9_-]{1,80}$')
+    kind: Literal['character', 'world', 'plot', 'style', 'genre', 'rating']
+    title: str = Field(min_length=1, max_length=100)
+    content: str = Field(min_length=1, max_length=2000)
+    evidence: str = Field(min_length=1, max_length=200)
+
+
+class ChatEdit(Strict):
+    original: str = Field(min_length=1, max_length=12000)
+    replacement: str = Field(min_length=1, max_length=16000)
+    reason: str = Field(min_length=1, max_length=1500)
+
+
+class ChatResponse(Strict):
+    reply: str = Field(min_length=1, max_length=10000)
+    questions: list[str] = Field(default_factory=list, max_length=3)
+    canonChanges: list[CanonChange] = Field(default_factory=list, max_length=12)
+    plan: LaunchPlan | None = None
+    edits: list[ChatEdit] = Field(default_factory=list, max_length=3)
+    summary: str = Field(min_length=1, max_length=5000)
+
+
+class CanonEdit(Revision):
+    id: str = Field(pattern=r'^[A-Za-z0-9_-]{1,80}$')
+    kind: Literal['character', 'world', 'plot', 'style', 'genre', 'rating']
+    title: str = Field(min_length=1, max_length=100)
+    content: str = Field(min_length=1, max_length=2000)
+    archived: bool = False
+
+
+class ChatApply(Confirm):
+    turnId: str = Field(pattern=r'^turn-[0-9]{8}$')
+    chapterRevision: int = Field(ge=1)
+    storyRevision: int = Field(ge=0)
+    episode: int = Field(ge=1)
+
+
 class SelectEpisode(Revision):
     number: int = Field(ge=1, le=1000000)
 

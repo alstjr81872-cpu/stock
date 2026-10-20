@@ -51,6 +51,8 @@ export function tokenPlan(
     plot_develop_check: [1024, 4096],
     synopsis: [3072, 12288],
     launch_plan: [2048, 8192],
+    chat_plan: [1024, 12288],
+    chat_write: [2048, 16384],
     bible_audit: [4096, 8192],
     auto_plan: [3072, 24576],
     tree_foundation: [3072, 16384],

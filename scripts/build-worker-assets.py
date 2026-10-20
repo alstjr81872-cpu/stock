@@ -9,6 +9,7 @@ names.append('PlotDevelopment')
 names.extend(['PlotGaps', 'PlotDevelopRequest'])
 names.extend(['SynopsisBatch', 'SelectEpisode', 'WritingSettings'])
 names.extend(['LaunchPlan', 'ApplyLaunch'])
+names.extend(['ChatStart', 'ChatRequest', 'ChatResponse', 'CanonEdit', 'ChatApply'])
 assets={'schemas':{name:getattr(schemas,name).model_json_schema() for name in names},'prompts':{p.stem:p.read_text() for p in (root/'prompts').glob('*.txt')},'modules':mock_ai.MODULES,'scenario':mock_ai.SCENARIO}
 # Pydantic's default_factory=list is optional in JSON Schema but omits default.
 # Materialize that default so the portable validator matches Python behavior.

@@ -138,7 +138,16 @@ export function checkPlotSeeds(p: Doc, plot: Doc) {
 export function storyContext(p: Doc) {
   const number = p.currentEpisode ?? 1;
   return {
-    plan: p.launchPlan ?? null,
+    plan: p.chatPlan ?? p.launchPlan ?? null,
+    conversationCanon: (p.conversationCanon ?? [])
+      .filter((c: Doc) => !c.archived)
+      .map(({ id, kind, title, content }: Doc) => ({
+        id,
+        kind,
+        title,
+        content,
+      })),
+    conversationVersion: p.conversationVersion ?? 0,
     worldFacts: (p.storyFacts ?? []).filter(
       (f: Doc) => f.introducedEpisode <= number,
     ),

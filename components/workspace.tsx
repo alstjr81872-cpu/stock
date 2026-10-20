@@ -709,7 +709,7 @@ const homeTools = [
     title: "새 작품 기획",
     subtitle: "흩어진 생각을 하나의 세계로",
     description:
-      "아이디어를 올리고, 질문에 답하며 작품의 뼈대를 단단하게 만들어보세요.",
+      "장르 한 줄에서 대화를 시작하고, 마음에 든 설정을 차곡차곡 쌓아보세요.",
     icon: Sparkles,
     tone: "violet",
     action: "새 기획 시작",
@@ -924,7 +924,7 @@ function Dashboard({
         ) : (
           <Empty
             title="첫 번째 이야기의 자리를 비워두었어요"
-            description="짧은 TXT 아이디어 하나면 충분해요. 기획부터 차근차근 함께 시작합니다."
+            description="쓰고 싶은 장르나 장면을 한 줄 알려주세요. AI와 대화하며 함께 기획합니다."
           >
             <Button variant="secondary" onClick={onCreate}>
               <Plus size={18} />첫 작품 만들기
@@ -1050,7 +1050,7 @@ function ProjectList({ projects, onOpen, onCreate }: any) {
           description={
             trash
               ? "휴지통의 작품은 자동으로 영구 삭제하지 않습니다."
-              : "TXT 기획 파일로 첫 작품을 만들어보세요."
+              : "장르 한 줄로 첫 작품의 대화를 시작해보세요."
           }
         >
           {!trash && <Button onClick={onCreate}>새 작품 만들기</Button>}
@@ -1069,8 +1069,9 @@ function CreateProject({
   const { run, busy, notify, mode } = useActions();
   const cloud = mode === "supabase";
   const [title, setTitle] = useState(""),
-    [genre, setGenre] = useState(cloud ? "파일에서 자동 분석" : "현대 판타지"),
+    [genre, setGenre] = useState(cloud ? "대화로 정하기" : "현대 판타지"),
     [file, setFile] = useState<File | null>(null);
+  const [idea, setIdea] = useState("");
   const [drag, setDrag] = useState(false);
   return (
     <Modal title="새로운 이야기의 시작" onClose={close}>
@@ -1078,6 +1079,16 @@ function CreateProject({
         onSubmit={(e) => {
           e.preventDefault();
           run(async () => {
+            if (cloud && !file) {
+              const p = await send("/projects/chat-start", {
+                title: title.trim() || "새로운 이야기",
+                genre,
+                idea: idea.trim() || genre + " 이야기를 함께 기획하고 싶어.",
+              });
+              notify("대화 공간을 만들었습니다. 첫 메시지부터 시작하세요.");
+              done(p);
+              return;
+            }
             if (!file) return;
             const form = new FormData();
             form.set(
@@ -1087,17 +1098,19 @@ function CreateProject({
                 "새로운 이야기",
             );
             form.set("genre", genre);
+            if (cloud) form.set("idea", idea);
             form.set("file", file);
             const p = await api("/projects", { method: "POST", body: form });
-            notify("파일을 저장했습니다. 바로 기획안으로 다듬어보세요.");
+            notify("파일을 저장했습니다. AI와 대화하며 기획해보세요.");
             done(p);
           });
         }}
       >
         <div className="modal-body">
           <p className="muted">
-            아이디어나 설정 메모를 파일로 올리세요. 주인공·인물·장르·문체를
-            추출하고 첫 10화로 이어갑니다. 원문은 보존합니다.
+            {cloud
+              ? "장르나 보고 싶은 장면을 한 줄 적고 AI와 대화를 시작하세요. 파일 없이도 기획할 수 있고, 막히면 ‘알아서 해줘’라고 하면 됩니다."
+              : "아이디어 파일을 올리고 기획을 시작하세요. 원문은 보존합니다."}
           </p>
           <label>
             작품 가제 {cloud && "· 선택"}
@@ -1113,7 +1126,7 @@ function CreateProject({
             장르
             <select value={genre} onChange={(e) => setGenre(e.target.value)}>
               {[
-                ...(cloud ? ["파일에서 자동 분석"] : []),
+                ...(cloud ? ["대화로 정하기"] : []),
                 "현대 판타지",
                 "아카데미",
                 "무협",
@@ -1127,6 +1140,19 @@ function CreateProject({
               ))}
             </select>
           </label>
+          {cloud && (
+            <label>
+              어떤 이야기를 쓰고 싶나요? · 선택
+              <textarea
+                aria-label="시작할 이야기"
+                rows={4}
+                maxLength={12000}
+                value={idea}
+                onChange={(e) => setIdea(e.target.value)}
+                placeholder="아카데미물인데 능글맞은 주인공이면 좋겠어. 같이 정해보자."
+              />
+            </label>
+          )}
           <label
             className={"dropzone " + (drag ? "dragover" : "")}
             onDragOver={(e) => {
@@ -1141,7 +1167,13 @@ function CreateProject({
             }}
           >
             <BookOpen size={28} />
-            <strong>{file ? file.name : "아이디어 파일을 놓아주세요"}</strong>
+            <strong>
+              {file
+                ? file.name
+                : cloud
+                  ? "참고 파일 첨부 · 선택"
+                  : "아이디어 파일을 놓아주세요"}
+            </strong>
             <span>
               또는 클릭해서 선택 · {cloud ? "TXT / MD / DOCX / PDF" : "TXT"} ·
               본문 최대 4만 자
@@ -1162,10 +1194,10 @@ function CreateProject({
           </div>
           <Button
             type="submit"
-            disabled={(!cloud && !title.trim()) || !file || busy}
+            disabled={(!cloud && (!title.trim() || !file)) || busy}
           >
             <Plus size={17} />
-            {cloud ? "파일로 시작하기" : "기획 초안 만들기"}
+            {cloud ? "대화 시작하기" : "기획 초안 만들기"}
           </Button>
         </div>
       </form>

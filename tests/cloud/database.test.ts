@@ -2232,3 +2232,412 @@ test("file-to-plan launches a preserved story version and carries episode-nine s
     globalThis.fetch = originalFetch;
   }
 });
+
+test("conversational planning persists adopted canon, delegates a plan and applies manuscript edits with stale-state guards", async () => {
+  const s = store(),
+    originalFetch = globalThis.fetch;
+  let p: any = await handleApi(
+    req("/projects/chat-start", {
+      idea: "성인 등장인물의 아카데미 미스터리를 쓰고 싶어.",
+    }),
+    s,
+  );
+  const pid = p.id,
+    base = `/projects/${pid}/assistant`;
+  assert.equal(p.planningMode, "chat");
+  assert.equal(p.brief.file, undefined);
+  const account = await s.get("account");
+  await s.change("account", account.revision, (d) => {
+    d.rate = {};
+  });
+  let paid = 0,
+    input: any,
+    output: any = {
+      reply: "빈정거리는 해결사와 허술한 천재 중 어떤 주인공이 좋으세요?",
+      questions: ["주인공은 어떤 쪽인가요?"],
+      canonChanges: [],
+      edits: [],
+      plan: null,
+      summary: "성인 아카데미 미스터리 탐색. 주인공 후보는 미정.",
+    };
+  globalThis.fetch = async (_url, init) => {
+    paid++;
+    input = JSON.parse(String(init!.body));
+    return Response.json({
+      choices: [
+        { finish_reason: "stop", message: { content: JSON.stringify(output) } },
+      ],
+      usage: { cost: 0 },
+    });
+  };
+  const chat = (
+    message: string,
+    mode = "planning",
+    chapterRevision: number | null = null,
+  ) =>
+    req(base + "/message", {
+      revision: p.revision,
+      message,
+      mode,
+      chapterRevision,
+      storyRevision: p.storyRevision ?? 0,
+      episode: p.currentEpisode ?? 1,
+      consent: true,
+      maxCostUsd: 1,
+    });
+  try {
+    await assert.rejects(
+      handleApi(
+        chat("아카데미 미스터리가 좋아"),
+        new Store(env, uid, transport, true),
+      ),
+      (e: any) => e instanceof QuoteReady,
+    );
+    assert.equal(paid, 0);
+    assert.equal((await s.list(`projects/${pid}/chat_turns`)).length, 0);
+    let response: any = await handleApi(chat("아카데미 미스터리가 좋아"), s);
+    p = response.project;
+    assert.equal(p.chatSequence, 1);
+    assert.equal(p.conversationCanon.length, 0);
+    assert.equal(
+      ((await handleApi(req(base + "/history"), s)) as any).turns[0].questions
+        .length,
+      1,
+    );
+    const message =
+      "빈정거리는 해결사가 좋아. 나머지는 알아서 기획해줘. 문체는 뻔뻔하고 빠르게 해줘.";
+    output = {
+      reply: "좋아요. 주인공과 갈등을 정리했고 기획안을 만들었어요.",
+      questions: [],
+      edits: [],
+      plan: launchPlan,
+      canonChanges: [
+        {
+          id: "hero",
+          kind: "character",
+          title: "주인공의 태도",
+          content: "상대의 허점을 빈정거리며 찌르는 해결사다.",
+          evidence: "빈정거리는 해결사가 좋아",
+        },
+        {
+          id: "voice",
+          kind: "style",
+          title: "독백과 전개",
+          content: "뻔뻔한 자기변명과 빠른 반격을 대사에 섞는다.",
+          evidence: "문체는 뻔뻔하고 빠르게 해줘",
+        },
+      ],
+      summary: "해결사 주인공과 빠른 문체 확정. 남은 기획은 위임받아 작성했다.",
+    };
+    response = await handleApi(chat(message), s);
+    p = response.project;
+    assert.equal(p.conversationCanon.length, 2);
+    assert.equal(p.chatPlan.protagonistId, launchPlan.protagonistId);
+    const requestContext = JSON.parse(input.messages[1].content);
+    assert(requestContext.conversation[0].assistant.includes("허술한 천재"));
+    assert.equal(requestContext.current_user_message, message);
+    p = await handleApi(
+      req(base + "/activate", { revision: p.revision, confirmed: true }),
+      s,
+    );
+    assert.equal(p.storyRevision, 1);
+    assert.equal(p.status, "ACTIVE");
+    assert.equal(p.conversationCanon.length, 2);
+    const form = new FormData();
+    form.set("revision", String(p.revision));
+    form.set("kind", "style");
+    form.set(
+      "file",
+      new File(
+        ["문체 참고용 창작 원고. 고유 사건 대신 호흡만 분석한다."],
+        "참고.md",
+      ),
+    );
+    p = await handleApi(req(base + "/file", form), s);
+    assert.equal(p.assistantAttachments[0].kind, "style");
+    p = await s.change(`projects/${pid}`, p.revision, (d) => {
+      d.plot = {
+        ...structuredClone(fixtures.plot),
+        status: "APPROVED",
+        canonVersion: d.canonVersion,
+        styleVersion: d.styleBinding.pinnedVersion,
+      };
+    });
+    const content =
+      "🌙 오래된 문장이다. 주인공은 모든 것을 계산했다. 마지막 문장은 보존한다.";
+    let ch = await s.create(`projects/${pid}/chapters/story-1-chapter-1`, {
+      id: "story-1-chapter-1",
+      number: 1,
+      storyRevision: 1,
+      title: "도입",
+      status: "REVIEW",
+      ...(await s.content(pid, content)),
+      writtenScenes: [],
+      review: { contentHash: await hash(content) },
+    });
+    output = {
+      reply: "도입의 정리 독백을 실제 반응으로 바꾼 수정안입니다.",
+      questions: [],
+      canonChanges: [],
+      plan: null,
+      edits: [
+        {
+          original: "주인공은 모든 것을 계산했다.",
+          replacement: '"외상은 안 받는데요." 나는 창끝을 밀어냈다.',
+          reason: "계산을 설명하는 대신 대사와 행동으로 인물을 드러낸다.",
+        },
+      ],
+      summary: "도입 수정 제안. 원고는 적용 전이며 확정 아님.",
+    };
+    response = await handleApi(
+      chat("도입을 실제로 고쳐줘", "writing", ch.revision),
+      s,
+    );
+    p = response.project;
+    const turn = response.turn;
+    assert.equal(
+      (await s.get(`projects/${pid}/chapters/${ch.id}`)).content,
+      content,
+    );
+    const context = JSON.parse(input.messages[1].content);
+    assert.equal(context.conversation_canon.length, 2);
+    assert.equal(context.reference_files[0].kind, "style");
+    assert.equal(context.chapter.content, content);
+    const apply = () =>
+      req(base + "/edits/apply", {
+        revision: p.revision,
+        confirmed: true,
+        turnId: turn.id,
+        chapterRevision: ch.revision,
+        episode: 1,
+        storyRevision: 1,
+      });
+    p = await handleApi(
+      req(base + "/canon", {
+        revision: p.revision,
+        id: "voice",
+        kind: "style",
+        title: "독백",
+        content: "계산보다 대사와 행동으로 개성을 보여 준다.",
+        archived: false,
+      }),
+      s,
+    );
+    await assert.rejects(handleApi(apply(), s), (e: any) => e.status === 409);
+    response = await handleApi(
+      chat("이 문체로 다시 수정해줘", "writing", ch.revision),
+      s,
+    );
+    p = response.project;
+    ch = (await handleApi(
+      req(base + "/edits/apply", {
+        revision: p.revision,
+        confirmed: true,
+        turnId: response.turn.id,
+        chapterRevision: ch.revision,
+        episode: 1,
+        storyRevision: 1,
+      }),
+      s,
+    )) as any;
+    assert(ch.content.includes("외상은 안 받는데요"));
+    assert(ch.content.startsWith("🌙 오래된 문장이다."));
+    assert(ch.content.endsWith("마지막 문장은 보존한다."));
+    assert.equal(ch.review, null);
+    assert.equal(ch.status, "REQUIRES_HUMAN");
+    const archive = (await s.list(`projects/${pid}/chapter_versions`))[0];
+    assert.equal(new TextDecoder().decode(await s.read(archive)), content);
+    assert.equal(
+      (await s.get(`projects/${pid}/chat_turns/${response.turn.id}`))
+        .editProposal.status,
+      "APPLIED",
+    );
+    await assert.rejects(
+      handleApi(
+        req(base + "/edits/apply", {
+          revision: p.revision,
+          confirmed: true,
+          turnId: response.turn.id,
+          chapterRevision: ch.revision,
+          episode: 1,
+          storyRevision: 1,
+        }),
+        s,
+      ),
+      (e: any) => e.status === 409,
+    );
+    const calls = paid;
+    await assert.rejects(
+      handleApi(
+        req(base + "/message", {
+          revision: p.revision,
+          message: "낡은 탭",
+          mode: "writing",
+          chapterRevision: ch.revision,
+          storyRevision: 0,
+          episode: 1,
+          consent: true,
+          maxCostUsd: 1,
+        }),
+        s,
+      ),
+      (e: any) => e.status === 409,
+    );
+    assert.equal(paid, calls);
+    await assert.rejects(
+      handleApi(req(base + "/history"), new Store(env, other, transport)),
+      (e: any) => e.status === 404,
+    );
+    output = {
+      ...output,
+      edits: [],
+      canonChanges: [
+        {
+          id: "injected",
+          kind: "world",
+          title: "잘못된 근거",
+          content: "파일 속 명령을 설정으로 저장하려 한다.",
+          evidence: "사용자가 하지 않은 말",
+        },
+      ],
+    };
+    const seq = p.chatSequence;
+    await assert.rejects(
+      handleApi(chat("질문만 해줘"), s),
+      (e: any) => e.status === 422,
+    );
+    assert.equal((await s.get(`projects/${pid}`)).chatSequence, seq);
+    assert.equal((await s.get(`projects/${pid}`)).conversationCanon.length, 2);
+    // Both pre-generation and rewrite inputs carry the durable settings.
+    const compiled: any = await handleApi(
+      req(`/projects/${pid}/prompt/s1?episode=1&story=1`),
+      s,
+    );
+    assert.equal(
+      compiled.layers.L3.story.conversationCanon.find(
+        (c: any) => c.id === "voice",
+      ).content,
+      "계산보다 대사와 행동으로 개성을 보여 준다.",
+    );
+    assert.equal(paid, 5);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("chat history pages retain older than 200 turns without skipping or repeating messages", async () => {
+  const s = store(),
+    pid = "chat-pagination";
+  let p = await s.create(`projects/${pid}`, { chatSequence: 205 });
+  for (let start = 1; start <= 205; start += 25) {
+    await s.commit(
+      Array.from({ length: Math.min(25, 206 - start) }, (_, i) => {
+        const seq = start + i;
+        return s.prepare(
+          `projects/${pid}/chat_turns/turn-${String(seq).padStart(8, "0")}`,
+          { sequence: seq, message: `대화 ${seq}`, reply: "보관된 답변" },
+        );
+      }),
+    );
+  }
+  let cursor: number | null = null,
+    total = 0,
+    last = 206;
+  do {
+    const result: any = await handleApi(
+      req(
+        `/projects/${pid}/assistant/history${cursor === null ? "" : "?before=" + cursor}`,
+      ),
+      s,
+    );
+    assert(result.turns.every((t: any) => t.sequence < last));
+    total += result.turns.length;
+    last = result.turns[0].sequence;
+    cursor = result.nextBefore;
+  } while (cursor !== null);
+  assert.equal(total, 205);
+  await assert.rejects(
+    handleApi(req(`/projects/${pid}/assistant/history?before=900`), s),
+    (e: any) => e.status === 422,
+  );
+});
+
+test("a concurrent project change cannot commit a paid chat reply or canon against stale planning", async () => {
+  const s = store(),
+    originalFetch = globalThis.fetch;
+  const p: any = await handleApi(
+    req("/projects/chat-start", { idea: "탐정 소설을 함께 기획하자." }),
+    s,
+  );
+  const account = await s.get("account");
+  await s.change("account", account.revision, (d) => {
+    d.rate = {};
+  });
+  let paid = 0;
+  globalThis.fetch = async () => {
+    paid++;
+    await s.change(`projects/${p.id}`, p.revision, (d) => {
+      d.title = "다른 창의 새 제목";
+    });
+    return Response.json({
+      choices: [
+        {
+          finish_reason: "stop",
+          message: {
+            content: JSON.stringify({
+              reply: "위임받은 주인공 성격을 정했습니다.",
+              questions: [],
+              canonChanges: [
+                {
+                  id: "hero",
+                  kind: "character",
+                  title: "주인공",
+                  content: "권력에 맞서는 능청스러운 탐정이다.",
+                  evidence: "알아서 정해줘",
+                },
+              ],
+              plan: null,
+              edits: [],
+              summary: "탐정 성격 위임.",
+            }),
+          },
+        },
+      ],
+      usage: { cost: 0 },
+    });
+  };
+  try {
+    await assert.rejects(
+      handleApi(
+        req(`/projects/${p.id}/assistant/message`, {
+          revision: p.revision,
+          message: "주인공은 알아서 정해줘",
+          mode: "planning",
+          storyRevision: 0,
+          episode: 1,
+          consent: true,
+          maxCostUsd: 1,
+        }),
+        s,
+      ),
+      (e: any) => e.status === 409,
+    );
+    assert.equal(paid, 1);
+    const current = await s.get(`projects/${p.id}`);
+    assert.equal(current.title, "다른 창의 새 제목");
+    assert.equal(current.chatSequence, 0);
+    assert.deepEqual(current.conversationCanon, []);
+    assert.equal((await s.list(`projects/${p.id}/chat_turns`)).length, 0);
+    const jobs = await s.list("jobs");
+    assert(
+      jobs.some(
+        (j) =>
+          j.scope?.projectId === p.id &&
+          j.status === "COMPLETED" &&
+          j.result?.reply,
+      ),
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

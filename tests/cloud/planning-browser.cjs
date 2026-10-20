@@ -105,6 +105,7 @@ const fixtures = require("./fixtures.json");
       developmentAudit,
       developmentProposal,
       manuscript;
+    const turns = [];
     let paid = 0;
     const quote = {
       estimateOnly: true,
@@ -133,19 +134,100 @@ const fixtures = require("./fixtures.json");
           spend: {},
           backup: { message: "미구성" },
         };
-      else if (path === "/api/projects") data = [p];
+      else if (path === "/api/projects/chat-start") {
+        const body = request.postDataJSON();
+        assert(!request.headers()["content-type"].includes("multipart"));
+        p = {
+          ...p,
+          title: body.title,
+          genre: body.genre,
+          brief: { text: body.idea, encoding: "utf-8" },
+          chatSeed: body.idea,
+          planningMode: "chat",
+          chatSequence: 0,
+          conversationCanon: [],
+        };
+        data = p;
+      } else if (path === "/api/projects") data = [p];
       else if (path === "/api/styles") data = [];
       else if (path === "/api/projects/launch-ui") data = p;
-      else if (path.endsWith("/launch/generate")) {
+      else if (path.endsWith("/assistant/history"))
+        data = { turns, nextBefore: null };
+      else if (path.endsWith("/assistant/message")) {
         paid++;
-        planProposal = {
-          id: "launch-proposal",
-          inputRevision: p.revision,
-          plan: structuredClone(launchPlan),
+        const body = request.postDataJSON(),
+          writing = body.mode === "writing";
+        const automated = body.message.includes("알아서");
+        const change = {
+          id: "voice",
+          kind: "style",
+          title: "주인공의 목소리",
+          content: "뻔뻔한 독백과 날카로운 대사로 빠르게 반격한다.",
+          evidence: body.message,
         };
-        data = planProposal;
-      } else if (path.endsWith("/launch/apply")) {
-        const plan = request.postDataJSON().plan;
+        const turn = {
+          id: "turn-" + String(turns.length + 1).padStart(8, "0"),
+          mode: body.mode,
+          episode: p.currentEpisode ?? 1,
+          message: body.message,
+          reply: writing
+            ? "늘어진 정리 문장을 대사와 행동으로 바꾼 수정안입니다."
+            : automated
+              ? "좋아요. 위임받은 부분을 정하고 첫 사건과 인물, 문체까지 기획으로 정리했어요."
+              : "권력에 맞서는 해결사와 허술한 천재 중 어느 쪽이 끌리세요?",
+          questions:
+            writing || automated
+              ? []
+              : ["주인공이 어떤 식으로 반격하면 좋을까요?"],
+          savedCanon: writing || automated ? [change] : [],
+          editProposal: writing
+            ? {
+                status: "PROPOSED",
+                edits: [
+                  {
+                    original: "카일은 경비의 장부를 뒤집어 들었다.",
+                    replacement:
+                      '"장부도 주인 닮아서 뒤집어졌네." 카일이 기록을 펼쳤다.',
+                    reason: "설명 대신 대사로 빈정거리는 목소리를 드러낸다.",
+                  },
+                ],
+              }
+            : null,
+        };
+        turns.push(turn);
+        p = {
+          ...p,
+          revision: p.revision + 1,
+          chatSequence: turns.length,
+          conversationCanon: writing || automated ? [change] : [],
+          chatPlan: automated ? structuredClone(launchPlan) : p.chatPlan,
+        };
+        data = { project: p, turn };
+      } else if (path.endsWith("/assistant/canon")) {
+        const body = request.postDataJSON();
+        p = {
+          ...p,
+          revision: p.revision + 1,
+          conversationCanon: [{ ...body }],
+        };
+        data = p;
+      } else if (path.endsWith("/assistant/edits/apply")) {
+        const turn = turns.find((t) => t.id === request.postDataJSON().turnId);
+        for (const edit of turn.editProposal.edits)
+          manuscript.content = manuscript.content.replace(
+            edit.original,
+            edit.replacement,
+          );
+        manuscript = {
+          ...manuscript,
+          revision: manuscript.revision + 1,
+          review: null,
+          status: "REQUIRES_HUMAN",
+        };
+        turn.editProposal.status = "APPLIED";
+        data = manuscript;
+      } else if (path.endsWith("/assistant/activate")) {
+        const plan = p.chatPlan;
         p = {
           ...p,
           revision: p.revision + 1,
@@ -165,7 +247,7 @@ const fixtures = require("./fixtures.json");
           styleBinding: {
             source: "launch",
             pinnedVersion: 1,
-            snapshot: { name: "기획안 문체", rules: { voice: plan.style } },
+            snapshot: { name: "대화 문체", rules: { voice: plan.style } },
           },
         };
         data = p;
@@ -359,6 +441,20 @@ const fixtures = require("./fixtures.json");
         assert.equal(url.searchParams.get("episode"), "17");
         assert.equal(url.searchParams.get("story"), "1");
         data = manuscript;
+      } else if (path.endsWith("/chapter/review")) {
+        paid++;
+        manuscript = {
+          ...manuscript,
+          revision: manuscript.revision + 1,
+          status: "REVIEW",
+          review: {
+            findings: [],
+            summary: "수정 원고를 검토했습니다.",
+            requiresHuman: false,
+            contentHash: manuscript.contentHash,
+          },
+        };
+        data = manuscript;
       } else if (path.endsWith("/chapter/approve")) {
         assert(request.postDataJSON().verifiedSeeds.includes(seedPlan.id));
         manuscript = {
@@ -394,42 +490,94 @@ const fixtures = require("./fixtures.json");
       .getByRole("heading", { name: "이야기를 이어갈 시간이에요." })
       .waitFor();
     await page
-      .getByRole("button", { name: /원문 기획/ })
-      .first()
+      .getByRole("button", { name: "새 작품 기획하기", exact: true })
       .click();
-    await page
-      .getByRole("heading", { name: "기획은 짧게, 이야기는 바로." })
-      .waitFor();
+    const create = page.getByRole("dialog", {
+      name: "새로운 이야기의 시작",
+      exact: true,
+    });
+    await create.getByRole("textbox", { name: "작품 가제" }).fill("채팅 기획");
+    await create
+      .getByRole("textbox", { name: "시작할 이야기", exact: true })
+      .fill("아카데미 미스터리를 쓰고 싶어");
+    await create
+      .getByRole("button", { name: "대화 시작하기", exact: true })
+      .click();
+    await create.waitFor({ state: "hidden" });
+    assert.equal(p.brief.file, undefined);
+    await page.getByRole("heading", { name: "대화로 만드는 이야기" }).waitFor();
     assert.equal(
       await page.getByRole("button", { name: /STEP 04/ }).count(),
       0,
     );
-    await page
-      .getByRole("button", { name: "파일 분석 · 기획안 만들기", exact: true })
-      .click();
+    const chat = page.getByRole("textbox", { name: "AI에게 보낼 메시지" });
+    await chat.fill("아카데미 미스터리를 쓰고 싶어");
+    await page.getByRole("button", { name: "보내기", exact: true }).click();
     assert.equal(paid, 0);
     await confirmAI();
-    const planModal = page.getByRole("dialog", {
-      name: "파일에서 만든 기획안",
-      exact: true,
-    });
-    await planModal.waitFor();
-    assert.equal(p.launchPlan, undefined);
-    await planModal
-      .getByRole("textbox", { name: "독자가 읽을 이유", exact: true })
-      .fill(
-        launchPlan.readerPromise +
-          " 첫 회차부터 주인공의 뻔뻔한 반격을 보여 준다.",
-      );
-    await planModal
+    await page
+      .getByText("주인공이 어떤 식으로 반격하면 좋을까요?", { exact: false })
+      .waitFor();
+    assert.equal(p.conversationCanon.length, 0);
+    await page.getByText("대화 비용 · 전송 설정", { exact: true }).click();
+    await page
       .getByRole("checkbox", {
-        name: "이 기획안으로 첫 10화를 설계하겠습니다.",
+        name: "응답당 아래 한도 내 유료 전송에 동의합니다",
+        exact: true,
       })
       .check();
-    await planModal
-      .getByRole("button", { name: "이 기획으로 10화 설계", exact: true })
+    await page
+      .getByRole("spinbutton", { name: "대화 응답당 비용 한도", exact: true })
+      .fill("0.15");
+    await chat.fill("빈정거리는 해결사가 좋아. 나머지는 알아서 기획해줘");
+    await page.getByRole("button", { name: "보내기", exact: true }).click();
+    await page
+      .getByText("설정집에 저장: 주인공의 목소리", { exact: false })
+      .waitFor();
+    assert.equal(p.conversationCanon.length, 1);
+    assert.equal(paid, 2);
+    assert.equal(await page.getByRole("dialog").count(), 0);
+    await page.reload();
+    await page
+      .getByRole("button", { name: /채팅 기획/ })
+      .first()
       .click();
-    await planModal.waitFor({ state: "hidden" });
+    await page
+      .getByText("설정집에 저장: 주인공의 목소리", { exact: false })
+      .waitFor();
+
+    await page
+      .getByRole("button", { name: "수정 · 보관", exact: true })
+      .click();
+    const canonModal = page.getByRole("dialog", {
+      name: "설정집 수정",
+      exact: true,
+    });
+    await canonModal
+      .getByRole("textbox", { name: "설정 내용" })
+      .fill("건조한 계산 대신 뻔뻔한 말과 행동으로 반격한다.");
+    await canonModal
+      .getByRole("button", { name: "설정 저장", exact: true })
+      .click();
+    await canonModal.waitFor({ state: "hidden" });
+    for (const width of [1440, 768, 390, 320]) {
+      await page.setViewportSize({ width, height: 1000 });
+      assert.equal(
+        await page.evaluate(
+          () => document.documentElement.scrollWidth > innerWidth,
+        ),
+        false,
+        "planning overflow at " + width,
+      );
+    }
+    await page.setViewportSize({ width: 1440, height: 1100 });
+    await page.screenshot({
+      path: "/tmp/nf-chat-planning.png",
+      fullPage: true,
+    });
+    await page
+      .getByRole("button", { name: "이 기획으로 시놉시스 만들기", exact: true })
+      .click();
     await confirmAI();
     const firstBatch = page.getByRole("dialog", {
       name: "1~10화 시놉시스 제안",
@@ -512,6 +660,35 @@ const fixtures = require("./fixtures.json");
       .click();
     await page.getByRole("heading", { name: "집필실", exact: true }).waitFor();
     await page
+      .getByRole("heading", { name: "집필 어시스턴트", exact: true })
+      .waitFor();
+    await page
+      .getByRole("textbox", { name: "AI에게 보낼 메시지" })
+      .fill("주인공 독백과 대사를 실제 수정안으로 바꿔줘");
+    await page.getByRole("button", { name: "보내기", exact: true }).click();
+    await confirmAI();
+    await page
+      .getByRole("button", { name: "원고 수정안 비교", exact: true })
+      .click();
+    const editModal = page.getByRole("dialog", {
+      name: "대화로 만든 원고 수정안",
+      exact: true,
+    });
+    await editModal.getByText("장부도 주인 닮아서", { exact: false }).waitFor();
+    assert(!manuscript.content.includes("장부도 주인 닮아서"));
+    await editModal
+      .getByRole("button", { name: "수정안을 원고에 적용", exact: true })
+      .click();
+    await editModal.waitFor({ state: "hidden" });
+    assert(manuscript.content.includes("장부도 주인 닮아서"));
+    await page.getByRole("button", { name: "독립 검토", exact: true }).click();
+    await confirmAI();
+    await page
+      .getByRole("button", { name: "원고 반영 완료", exact: true })
+      .waitFor();
+    await page.screenshot({ path: "/tmp/nf-chat-writing.png", fullPage: true });
+
+    await page
       .getByRole("checkbox", {
         name: "원고와 검토 근거를 직접 확인했고 이 버전을 확정합니다.",
       })
@@ -543,7 +720,7 @@ const fixtures = require("./fixtures.json");
     }
     assert.deepEqual(errors, []);
     console.log(
-      "PASS: three-step file plan, editable preview, automatic 10-episode synopsis, episode-nine seed paid at seventeen, staged development, manuscript verification and 320–1440px layouts. API/auth/model fixtures only.",
+      "PASS: planning chat, delegated plan, durable editable canon, writing assistant edits, synopsis/seed continuity and 320–1440px layouts. API/auth/model fixtures only.",
     );
   } finally {
     await browser.close();

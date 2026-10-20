@@ -17,16 +17,19 @@ import { api, send, date, statuses, download, ApiError } from "@/lib/api";
 import { Badge, Empty, Modal, useActions } from "./workspace";
 import { Button } from "./ui/button";
 import Editor from "./editor";
+import StoryAssistant from "./story-assistant";
 export default function WritingRoom({
   project: p,
   reloadProject,
   onNext,
+  onProjectUpdate,
 }: {
   project: any;
   reloadProject: () => Promise<void>;
   onNext?: () => Promise<void>;
+  onProjectUpdate?: (p: any) => Promise<void>;
 }) {
-  const { busy, run, askAI, notify, registerLeave } = useActions();
+  const { busy, run, askAI, notify, registerLeave, mode } = useActions();
   const [ch, setCh] = useState<any>(null),
     [text, setText] = useState(""),
     [title, setTitle] = useState(""),
@@ -197,6 +200,22 @@ export default function WritingRoom({
       kind: "회수",
     })),
   ];
+  const assistant =
+    mode === "supabase" ? (
+      <StoryAssistant
+        project={p}
+        writing
+        onUpdate={async (data) => {
+          if (onProjectUpdate) await onProjectUpdate(data);
+          else await reloadProject();
+        }}
+        prepare={async () => {
+          if (!(await flush())) return null;
+          return { chapterRevision: chRef.current?.revision ?? null };
+        }}
+        onManuscript={adopt}
+      />
+    ) : null;
   return (
     <>
       <div className="section-heading">
@@ -218,6 +237,13 @@ export default function WritingRoom({
           {saveState}
         </span>
       </div>
+      {p.episodeSynopsis && (
+        <details className="panel writing-synopsis">
+          <summary>이번 회차 시놉시스 · {episode}화</summary>
+          <p>{p.episodeSynopsis.synopsis}</p>
+          <p className="muted">독자 보상: {p.episodeSynopsis.readerPayoff}</p>
+        </details>
+      )}
       {ch?.status === "APPROVED" && onNext && (
         <div className="panel button-row">
           <p>제{episode}화 원고를 확정했습니다.</p>
@@ -234,6 +260,7 @@ export default function WritingRoom({
           최신 기획서와 현재 구간 플롯을 승인해야 AI 집필을 시작할 수 있습니다.
         </div>
       )}
+      {!ch && !loading && assistant}
       {loading ? (
         <div className="loading-page">
           <Loader2 className="spin" />
@@ -401,6 +428,7 @@ export default function WritingRoom({
             </div>
           </section>
           <aside className="writing-rail">
+            {assistant}
             <div className="panel">
               <h3>원고 버전</h3>
               <p className="muted">
@@ -536,6 +564,12 @@ export default function WritingRoom({
                     setFork(false);
                     await reloadProject();
                     notify("회차 확정과 캐논 버전 갱신을 완료했습니다.");
+                    if (
+                      onNext &&
+                      p.seriesEnabled &&
+                      episode >= (p.synopsisThrough ?? Infinity)
+                    )
+                      await onNext();
                   })
                 }
               >
