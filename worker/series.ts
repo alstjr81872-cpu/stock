@@ -9,9 +9,14 @@ import {
 } from "./shared";
 import { validate } from "./validation";
 import { generate } from "./ai";
+import { validateStoryBatch } from "./story-ledger";
 export const episodeNumber = (p: Doc) => p.currentEpisode ?? 1;
-export const chapterPath = (p: Doc) =>
-  `projects/${p.id}/chapters/chapter-${episodeNumber(p)}`;
+export const chapterId = (p: Doc, number = episodeNumber(p)) =>
+  `${p.storyRevision ? `story-${p.storyRevision}-` : ""}chapter-${number}`;
+export const chapterPath = (p: Doc, number = episodeNumber(p)) =>
+  `projects/${p.id}/chapters/${chapterId(p, number)}`;
+export const episodePlanPath = (p: Doc, number = episodeNumber(p)) =>
+  `projects/${p.id}/episode_plans/${p.storyRevision ? `story-${p.storyRevision}-` : ""}episode-${number}`;
 const done = (ch: Doc | null) =>
   ch && ["APPROVED", "LOCKED"].includes(ch.status);
 
@@ -23,17 +28,51 @@ export function fitLength(plot: Doc, target?: number): Doc {
     "설정한 분량에 맞는 장면 수가 필요합니다. 회차를 다시 설계하거나 자동 전개로 장면을 구체화해주세요.",
     422,
   );
+  const weights = plot.scenes.map((s: Doc) =>
+    Number.isFinite(s.targetChars) && s.targetChars > 0 ? s.targetChars : 1,
+  );
+  const remaining = new Set<number>(weights.map((_w: number, i: number) => i)),
+    lengths: number[] = [];
+  let available = target;
+  while (remaining.size) {
+    const indices = [...remaining],
+      sum = indices.reduce((n, i) => n + weights[i], 0);
+    const quota = (i: number) => (available * weights[i]) / sum;
+    // Clamp minimums first so short setup beats cannot be crowded out.
+    const low = indices.find((i) => quota(i) < 200);
+    const high =
+      low === undefined ? indices.find((i) => quota(i) > 5000) : undefined;
+    const fixed = low ?? high;
+    if (fixed !== undefined) {
+      lengths[fixed] = low !== undefined ? 200 : 5000;
+      available -= lengths[fixed];
+      remaining.delete(fixed);
+      continue;
+    }
+    for (const i of indices) lengths[i] = Math.floor(quota(i));
+    let rest = available - indices.reduce((n, i) => n + lengths[i], 0);
+    for (const i of indices.sort((a, b) => (quota(b) % 1) - (quota(a) % 1)))
+      if (rest > 0 && lengths[i] < 5000) {
+        lengths[i]++;
+        rest--;
+      }
+    break;
+  }
   return {
     ...plot,
     scenes: plot.scenes.map((scene: Doc, i: number) => ({
       ...scene,
-      targetChars: Math.floor(target / count) + (i < target % count ? 1 : 0),
+      targetChars: lengths[i],
     })),
   };
 }
 export async function synopsisState(s: Store, p: Doc) {
   const batches = (await s.list(`projects/${p.id}/synopsis_batches`))
-    .filter((b: Doc) => b.status === "APPLIED")
+    .filter(
+      (b: Doc) =>
+        b.status === "APPLIED" &&
+        (b.storyRevision ?? 0) === (p.storyRevision ?? 0),
+    )
     .sort((a: Doc, b: Doc) => a.start - b.start);
   const end = batches.at(-1)?.end ?? 0;
   const completed = p.completedEpisodes ?? [];
@@ -48,6 +87,8 @@ export async function synopsisState(s: Store, p: Doc) {
       Array.from({ length: 10 }, (_, i) => end - 9 + i).every((n) =>
         completed.includes(n),
       ),
+    seeds: p.foreshadowing ?? [],
+    worldFacts: p.storyFacts ?? [],
   };
 }
 export async function proposeSynopsis(s: Store, p: Doc, body: Doc) {
@@ -63,7 +104,12 @@ export async function proposeSynopsis(s: Store, p: Doc, body: Doc) {
     409,
   );
   const recent = (await s.list(`projects/${p.id}/chapters`))
-    .filter((ch: Doc) => done(ch))
+    .filter(
+      (ch: Doc) =>
+        done(ch) &&
+        (ch.number ?? 1) < start &&
+        (ch.storyRevision ?? 0) === (p.storyRevision ?? 0),
+    )
     .sort((a: Doc, b: Doc) => (b.number ?? 1) - (a.number ?? 1))
     .slice(0, 10)
     .map((ch: Doc) => ({
@@ -79,7 +125,11 @@ export async function proposeSynopsis(s: Store, p: Doc, body: Doc) {
       start,
       end,
       targetChars: p.defaultTargetChars ?? p.targetChars ?? 5000,
-      common_planning_tree: p.planningTree ?? null,
+      common_planning_tree:
+        p.planningMode === "launch" ? null : (p.planningTree ?? null),
+      launch_plan: p.launchPlan ?? null,
+      foreshadowing: p.foreshadowing ?? [],
+      worldFacts: p.storyFacts ?? [],
       requirements: p.requirements,
       answers: p.answers,
       character_names: p.characterNames ?? [],
@@ -95,6 +145,7 @@ export async function proposeSynopsis(s: Store, p: Doc, body: Doc) {
     "시놉시스는 요청한 10개 회차를 번호 순서대로 모두 포함해야 합니다.",
     422,
   );
+  validateStoryBatch(p, result, start, end);
   const key = id(),
     op = s.prepare(`projects/${p.id}/synopsis_batches/${key}`, {
       id: key,
@@ -105,6 +156,7 @@ export async function proposeSynopsis(s: Store, p: Doc, body: Doc) {
       result,
       run,
       createdAt: now(),
+      storyRevision: p.storyRevision ?? 0,
     });
   await s.commit([
     { path: `projects/${p.id}`, expected: p.revision, guard: true },
@@ -132,6 +184,14 @@ export async function applySynopsis(s: Store, p: Doc, body: Doc) {
     409,
   );
   const next = structuredClone(p);
+  const ledger = validateStoryBatch(
+    p,
+    proposal.result,
+    proposal.start,
+    proposal.end,
+  );
+  next.foreshadowing = ledger.seeds;
+  next.storyFacts = ledger.facts;
   next.seriesEnabled = true;
   next.targetChars ??=
     p.plot?.scenes?.reduce(
@@ -151,7 +211,7 @@ export async function applySynopsis(s: Store, p: Doc, body: Doc) {
     next.currentEpisode === proposal.start - 1 &&
     (p.completedEpisodes ?? []).includes(proposal.start - 1)
   ) {
-    const source = `projects/${p.id}/episode_plans/episode-${next.currentEpisode}`,
+    const source = episodePlanPath(p, next.currentEpisode),
       old = await s.find(source);
     extras.push(
       s.prepare(
@@ -191,11 +251,9 @@ export async function selectEpisode(s: Store, p: Doc, body: Doc) {
     .flatMap((b: Doc) => b.result.episodes)
     .find((e: Doc) => e.number === body.number);
   check(synopsis, "먼저 해당 구간의 시놉시스를 만들어주세요.", 422);
-  const source = `projects/${p.id}/episode_plans/episode-${episodeNumber(p)}`;
+  const source = episodePlanPath(p);
   const old = await s.find(source),
-    target = await s.find(
-      `projects/${p.id}/episode_plans/episode-${body.number}`,
-    );
+    target = await s.find(episodePlanPath(p, body.number));
   const next = {
     ...p,
     currentEpisode: body.number,
@@ -246,7 +304,7 @@ export async function requirePreviousChapter(s: Store, p: Doc) {
   const number = episodeNumber(p);
   if (number > 1)
     check(
-      done(await s.find(`projects/${p.id}/chapters/chapter-${number - 1}`)),
+      done(await s.find(chapterPath(p, number - 1))),
       `${number - 1}화 원고를 확정한 뒤 다음 회차를 집필해주세요.`,
       409,
     );

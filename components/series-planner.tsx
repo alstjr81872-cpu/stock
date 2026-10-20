@@ -8,11 +8,15 @@ export default function SeriesPlanner({
   onUpdate,
   onSelected,
   beforeSelect,
+  autoStart = false,
+  onAutoStarted,
 }: {
   project: any;
   onUpdate: (p: any) => Promise<void>;
   onSelected: () => void;
   beforeSelect: () => Promise<boolean>;
+  autoStart?: boolean;
+  onAutoStarted?: () => void;
 }) {
   const { busy, run, askAI, notify } = useActions();
   const [state, setState] = useState<any>(null),
@@ -75,6 +79,12 @@ export default function SeriesPlanner({
     onSelected();
   }
   const episodes = state?.batches.flatMap((b: any) => b.result.episodes) ?? [];
+  useEffect(() => {
+    if (autoStart && state && !busy) {
+      onAutoStarted?.();
+      if (!state.batches.length) run(generate);
+    }
+  }, [autoStart, state, busy]);
   return (
     <section className="panel series-planner">
       <div className="panel-heading">
@@ -168,8 +178,72 @@ export default function SeriesPlanner({
             제{p.currentEpisode ?? 1}화 · {p.episodeSynopsis.title} 시놉시스
           </summary>
           <p>{p.episodeSynopsis.synopsis}</p>
+          {p.episodeSynopsis.openingHook && (
+            <p>첫 흥미 장면: {p.episodeSynopsis.openingHook}</p>
+          )}
+          {p.episodeSynopsis.readerPayoff && (
+            <p>이번 화의 보상: {p.episodeSynopsis.readerPayoff}</p>
+          )}
+          {(p.episodeSynopsis.seedPlants ?? []).map((b: any) => (
+            <p key={b.seedId}>복선 투척: {b.action}</p>
+          ))}
+          {(p.episodeSynopsis.seedPayoffs ?? []).map((b: any) => (
+            <p key={b.seedId}>복선 회수: {b.action}</p>
+          ))}
           <p>변화: {p.episodeSynopsis.characterChange}</p>
           <p>다음 연결: {p.episodeSynopsis.endingHook}</p>
+        </details>
+      )}
+      {!!state?.seeds?.length && (
+        <details className="foreshadow-ledger">
+          <summary>복선 투척 · 회수 기록 ({state.seeds.length}개)</summary>
+          <div className="ledger-table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>복선</th>
+                  <th>투척</th>
+                  <th>회수 예정</th>
+                  <th>어떻게 회수하는가</th>
+                  <th>진행</th>
+                </tr>
+              </thead>
+              <tbody>
+                {state.seeds.map((seed: any) => (
+                  <tr key={seed.id}>
+                    <td>
+                      <strong>{seed.title}</strong>
+                      <p>{seed.plantMethod}</p>
+                    </td>
+                    <td>{seed.plantEpisode}화</td>
+                    <td>{seed.payoffEpisode}화</td>
+                    <td>{seed.payoffMethod}</td>
+                    <td>
+                      {seed.status === "paid"
+                        ? "회수 확인"
+                        : seed.status === "planted"
+                          ? "투척 확인"
+                          : "계획"}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </details>
+      )}
+      {!!state?.worldFacts?.length && (
+        <details>
+          <summary>
+            회차를 따라 쌓인 세계관 ({state.worldFacts.length}개)
+          </summary>
+          {state.worldFacts.map((f: any) => (
+            <p key={f.id}>
+              {f.introducedEpisode ? `${f.introducedEpisode}화 도입` : "기획안"}{" "}
+              · {f.statement} ·{" "}
+              {f.status === "established" ? "확정 원고 반영" : "전개 예정"}
+            </p>
+          ))}
         </details>
       )}
       {showRecords && (
@@ -180,6 +254,14 @@ export default function SeriesPlanner({
                 {e.number}화 · {e.title}
               </h3>
               <p>{e.synopsis}</p>
+              {e.openingHook && <p>도입: {e.openingHook}</p>}
+              {e.readerPayoff && <p>보상: {e.readerPayoff}</p>}
+              {(e.seedPlants ?? []).map((b: any) => (
+                <p key={b.seedId}>투척: {b.action}</p>
+              ))}
+              {(e.seedPayoffs ?? []).map((b: any) => (
+                <p key={b.seedId}>회수: {b.action}</p>
+              ))}
               <p>{e.characterChange}</p>
               <p>{e.endingHook}</p>
               <Button
@@ -234,10 +316,29 @@ export default function SeriesPlanner({
                   {e.number}화 · {e.title}
                 </h3>
                 <p>{e.synopsis}</p>
+                {e.openingHook && <p>도입: {e.openingHook}</p>}
+                {e.readerPayoff && <p>보상: {e.readerPayoff}</p>}
+                {(e.seedPlants ?? []).map((b: any) => (
+                  <p key={b.seedId}>복선 투척: {b.action}</p>
+                ))}
+                {(e.seedPayoffs ?? []).map((b: any) => (
+                  <p key={b.seedId}>복선 회수: {b.action}</p>
+                ))}
                 <p>{e.characterChange}</p>
                 <p>{e.endingHook}</p>
               </div>
             ))}
+            {!!proposal.result.seeds?.length && (
+              <div className="panel">
+                <h3>복선 회수 일정</h3>
+                {proposal.result.seeds.map((s: any) => (
+                  <p key={s.id}>
+                    {s.title} · {s.plantEpisode}화 투척 → {s.payoffEpisode}화
+                    회수 · {s.payoffMethod}
+                  </p>
+                ))}
+              </div>
+            )}
             <div className="button-row">
               <Button
                 disabled={busy || proposal.inputRevision !== p.revision}

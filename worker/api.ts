@@ -3,6 +3,7 @@ import { planningCarryover } from "../lib/planning-tree";
 import {
   episodeNumber,
   chapterPath,
+  chapterId,
   synopsisState,
   proposeSynopsis,
   applySynopsis,
@@ -44,6 +45,12 @@ import {
 } from "./shared";
 import { generate, catalog, defaults, ROLES } from "./ai";
 import { validate } from "./validation";
+import { proposeLaunch, applyLaunch, draftLaunch } from "./launch";
+import {
+  storyContext,
+  checkPlotSeeds,
+  confirmStoryBeats,
+} from "./story-ledger";
 import { extract, filename, overlap } from "./parsers";
 import assets from "./assets.json";
 import { zipSync } from "fflate";
@@ -119,13 +126,20 @@ async function compile(s: Store, p: Doc, sceneId: string) {
   );
   const scene = plot.scenes.find((x: Doc) => x.id === sceneId);
   check(scene, "장면을 찾을 수 없습니다.", 404);
+  checkPlotSeeds(p, plot);
+  for (const seedId of scene.seedPayoffs ?? [])
+    check(
+      (p.foreshadowing ?? []).some(
+        (s: Doc) => s.id === seedId && s.status === "planted",
+      ),
+      "이전 회차에서 투척을 확정하지 않은 복선은 회수 원고를 쓸 수 없습니다.",
+      409,
+    );
   const ch = await s.find(cp(p));
   const prior =
     ch ??
     (episodeNumber(p) > 1
-      ? await s.find(
-          `projects/${p.id}/chapters/chapter-${episodeNumber(p) - 1}`,
-        )
+      ? await s.find(chapterPath(p, episodeNumber(p) - 1))
       : null);
   const previous = prior ? cut((await s.hydrate(prior)).content, -1500) : "";
   return {
@@ -142,8 +156,10 @@ async function compile(s: Store, p: Doc, sceneId: string) {
       L2: p.styleBinding.snapshot,
       L3: {
         requirements: p.requirements,
-        bible: p.planningMode === "tree" ? {} : p.bible,
-        common_planning_tree: p.planningTree ?? null,
+        bible: ["tree", "launch"].includes(p.planningMode) ? {} : p.bible,
+        common_planning_tree:
+          p.planningMode === "launch" ? null : (p.planningTree ?? null),
+        story: storyContext(p),
         plot_continuation_notes: p.plot?.continuationNotes ?? [],
         episode_number: episodeNumber(p),
         episode_synopsis: p.episodeSynopsis ?? null,
@@ -299,15 +315,15 @@ export async function handleApi(request: Request, s: Store): Promise<unknown> {
       422,
     );
     check(
-      file instanceof File && file.name.toLowerCase().endsWith(".txt"),
-      "첫 기획은 TXT로 업로드하세요.",
+      file instanceof File && /\.(txt|md|docx|pdf)$/i.test(file.name),
+      "TXT·MD·DOCX·PDF 기획 파일을 업로드하세요.",
       415,
     );
     const raw = new Uint8Array(await file.arrayBuffer()),
       result = await extract(file.name, raw);
     check(
       length(result.text) <= 40000,
-      "기획 TXT는 4만 자 이하로 나누어 주세요.",
+      "기획 파일은 추출한 본문 기준 4만 자 이하로 나누어 주세요.",
       413,
     );
     let offset = 0;
@@ -603,6 +619,8 @@ export async function handleApi(request: Request, s: Store): Promise<unknown> {
         "plot_checks",
         "synopsis_batches",
         "episode_plans",
+        "launch_proposals",
+        "launch_history",
       ])
         subcollections[name] = await s.list(`${pp}/${name}`);
       files["project.json"] = bytes(
@@ -643,8 +661,19 @@ export async function handleApi(request: Request, s: Store): Promise<unknown> {
     }
     // All other project operations require a live, owned project.
     const p = await s.get(pp);
+    if (action === "launch/generate" && method === "POST")
+      return proposeLaunch(s, p, body);
+    if (action === "launch/apply" && method === "POST")
+      return applyLaunch(s, p, body);
+    if (action === "launch/draft" && method === "POST")
+      return draftLaunch(s, p, body);
     if (["chapter", "scenes", "prompt"].includes(parts[2])) {
       const requested = url.searchParams.get("episode");
+      check(
+        Number(url.searchParams.get("story") ?? 0) === (p.storyRevision ?? 0),
+        "연재 버전이 변경됐습니다. 편집한 글을 보관하고 새로 불러와주세요.",
+        409,
+      );
       check(
         (!requested && !p.seriesEnabled) ||
           Number(requested) === episodeNumber(p),
@@ -814,7 +843,8 @@ export async function handleApi(request: Request, s: Store): Promise<unknown> {
             section: key,
             sectionTitle: modules[key],
             existing_section: p.bible[key] ?? null,
-            common_planning_tree: p.planningTree ?? null,
+            common_planning_tree:
+              p.planningMode === "launch" ? null : (p.planningTree ?? null),
             planning_decisions: p.planningDecisions ?? [],
             character_names: p.characterNames ?? [],
             requirements: p.requirements,
@@ -877,7 +907,8 @@ export async function handleApi(request: Request, s: Store): Promise<unknown> {
         {
           requirements: p.requirements,
           answers: p.answers,
-          common_planning_tree: p.planningTree ?? null,
+          common_planning_tree:
+            p.planningMode === "launch" ? null : (p.planningTree ?? null),
           planning_decisions: p.planningDecisions ?? [],
           character_names: p.characterNames ?? [],
           bible: p.bible,
@@ -1012,16 +1043,20 @@ export async function handleApi(request: Request, s: Store): Promise<unknown> {
         s,
         "plot",
         {
-          approved_bible: p.planningMode === "tree" ? {} : p.bible,
+          approved_bible: ["tree", "launch"].includes(p.planningMode)
+            ? {}
+            : p.bible,
           pending_planning:
             p.planningMode === "tree" ? planningCarryover(p) : null,
-          common_planning_tree: p.planningTree ?? null,
+          common_planning_tree:
+            p.planningMode === "launch" ? null : (p.planningTree ?? null),
           planning_decisions: p.planningDecisions ?? [],
           character_names: p.characterNames ?? [],
           approved_style: p.styleBinding.snapshot,
           requirements: p.requirements,
           answers: p.answers,
           episode_synopsis: p.episodeSynopsis ?? null,
+          story: storyContext(p),
           target: `${episodeNumber(p)}화, 공백 제외 목표 ${p.targetChars ?? 5000}자. 장면 ${Math.max(2, Math.ceil((p.targetChars ?? 5000) / 5000))}~6개. 승인된 해당 회차 시놉시스의 사건과 결말 연결을 구체화한다.`,
         },
         body,
@@ -1033,6 +1068,7 @@ export async function handleApi(request: Request, s: Store): Promise<unknown> {
         "장면 ID는 고유해야 합니다.",
         422,
       );
+      checkPlotSeeds(p, result);
       return s.change(pp, body.revision, (d) => {
         active(d);
         d.plot = {
@@ -1046,6 +1082,7 @@ export async function handleApi(request: Request, s: Store): Promise<unknown> {
     }
     if (action === "plot" && method === "PUT") {
       parsed("PlotEdit");
+      checkPlotSeeds(p, body.plot);
       check(
         new Set(body.plot.scenes.map((sc: Doc) => sc.id)).size ===
           body.plot.scenes.length,
@@ -1069,6 +1106,7 @@ export async function handleApi(request: Request, s: Store): Promise<unknown> {
         body.revision,
         (d) => {
           active(d);
+          checkPlotSeeds(d, d.plot);
           check(
             body.confirmed &&
               ["REVIEW", "INVALIDATED"].includes(d.plot?.status),
@@ -1142,7 +1180,7 @@ export async function handleApi(request: Request, s: Store): Promise<unknown> {
           run,
         }),
         s.prepare(
-          `${pp}/scenes/${episodeNumber(p) === 1 ? sceneId : `chapter-${episodeNumber(p)}-${sceneId}`}`,
+          `${pp}/scenes/${!p.storyRevision && episodeNumber(p) === 1 ? sceneId : `${chapterId(p)}-${sceneId}`}`,
           {
             sceneOrder: done.length + 1,
             content: result,
@@ -1154,7 +1192,8 @@ export async function handleApi(request: Request, s: Store): Promise<unknown> {
       if (ch)
         return updateChapter(s, pid, ch, fields, false, p.revision, extras);
       const op = s.prepare(cp(p), {
-        id: `chapter-${episodeNumber(p)}`,
+        id: chapterId(p),
+        storyRevision: p.storyRevision ?? 0,
         number: episodeNumber(p),
         title: p.plot.chapterTitle,
         createdAt: now(),
@@ -1203,7 +1242,7 @@ export async function handleApi(request: Request, s: Store): Promise<unknown> {
       return (await s.list(`${pp}/chapter_versions`)).filter(
         (v) =>
           v.status === "COMMITTED" &&
-          (v.chapterId ?? "chapter-1") === `chapter-${episodeNumber(p)}`,
+          (v.chapterId ?? "chapter-1") === chapterId(p),
       );
     if (
       parts[2] === "chapter" &&
@@ -1213,7 +1252,7 @@ export async function handleApi(request: Request, s: Store): Promise<unknown> {
     ) {
       const v = await s.get(`${pp}/chapter_versions/${parts[4]}`);
       check(
-        (v.chapterId ?? "chapter-1") === `chapter-${episodeNumber(p)}`,
+        (v.chapterId ?? "chapter-1") === chapterId(p),
         "이 회차의 버전이 아닙니다.",
         404,
       );
@@ -1258,14 +1297,19 @@ export async function handleApi(request: Request, s: Store): Promise<unknown> {
         "review",
         {
           content: ch.content,
-          approved_bible: p.planningMode === "tree" ? {} : p.bible,
+          approved_bible: ["tree", "launch"].includes(p.planningMode)
+            ? {}
+            : p.bible,
           pending_planning:
             p.planningMode === "tree" ? planningCarryover(p) : null,
-          common_planning_tree: p.planningTree ?? null,
+          common_planning_tree:
+            p.planningMode === "launch" ? null : (p.planningTree ?? null),
           planning_decisions: p.planningDecisions ?? [],
           character_names: p.characterNames ?? [],
           style_bible: p.styleBinding.snapshot,
           scene_plan: p.plot,
+          story: storyContext(p),
+          episode_synopsis: p.episodeSynopsis ?? null,
         },
         body,
         { projectId: pid },
@@ -1318,6 +1362,8 @@ export async function handleApi(request: Request, s: Store): Promise<unknown> {
           ),
           right_context: cut(ch.content, body.end, body.end + 600),
           instruction: body.instruction,
+          story: storyContext(p),
+          episode_synopsis: p.episodeSynopsis ?? null,
           approved_style: p.styleBinding.snapshot,
         },
         body,
@@ -1393,14 +1439,17 @@ export async function handleApi(request: Request, s: Store): Promise<unknown> {
           new Set(ch.writtenScenes).size === p.plot.scenes.length,
         "플롯 승인 및 모든 장면 집필을 완료하세요.",
       );
-      const archive = await s.archive(pid, ch),
-        nextP = {
-          ...p,
-          canonVersion: p.canonVersion + 1,
-          completedEpisodes: [
-            ...new Set([...(p.completedEpisodes ?? []), episodeNumber(p)]),
-          ],
-        };
+      const nextP = {
+        ...p,
+        canonVersion: p.canonVersion + 1,
+        completedEpisodes: [
+          ...new Set([...(p.completedEpisodes ?? []), episodeNumber(p)]),
+        ],
+        foreshadowing: structuredClone(p.foreshadowing ?? []),
+        storyFacts: structuredClone(p.storyFacts ?? []),
+      };
+      confirmStoryBeats(nextP, ch, body.verifiedSeeds);
+      const archive = await s.archive(pid, ch);
       const next = s.prepare(
         cp(p),
         {

@@ -11,6 +11,7 @@ import { validate } from "./validation";
 import { generate } from "./ai";
 import { planningCarryover } from "../lib/planning-tree";
 import { fitLength } from "./series";
+import { storyContext, checkPlotSeeds } from "./story-ledger";
 
 export function developmentIssues(plot: Doc): Doc[] {
   return [
@@ -108,8 +109,10 @@ function developmentInput(p: Doc) {
   return {
     current_plot: plotBody(p.plot),
     issues: developmentIssues(p.plot),
-    common_planning_tree: p.planningTree ?? null,
-    approved_bible: p.planningMode === "tree" ? {} : p.bible,
+    common_planning_tree:
+      p.planningMode === "launch" ? null : (p.planningTree ?? null),
+    approved_bible: ["tree", "launch"].includes(p.planningMode) ? {} : p.bible,
+    story: storyContext(p),
     approved_style: p.styleBinding?.snapshot ?? null,
     character_names: p.characterNames ?? [],
     requirements: p.requirements,
@@ -191,6 +194,7 @@ export async function proposeDevelopment(s: Store, p: Doc, body: Doc) {
       p.targetChars,
     ),
     key = id();
+  checkPlotSeeds(p, preview);
   const op = s.prepare(`projects/${p.id}/plot_proposals/${key}`, {
     id: key,
     inputRevision: p.revision,
@@ -235,6 +239,7 @@ export async function applyDevelopment(s: Store, p: Doc, body: Doc) {
     developmentPreview(p.plot, proposal.result, gaps),
     p.targetChars,
   );
+  checkPlotSeeds(p, preview);
   const next = structuredClone(p);
   next.plot = {
     ...preview,

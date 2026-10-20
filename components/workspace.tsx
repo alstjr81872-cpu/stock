@@ -1066,9 +1066,10 @@ function CreateProject({
   close: () => void;
   done: (p: any) => void;
 }) {
-  const { run, busy, notify } = useActions();
+  const { run, busy, notify, mode } = useActions();
+  const cloud = mode === "supabase";
   const [title, setTitle] = useState(""),
-    [genre, setGenre] = useState("현대 판타지"),
+    [genre, setGenre] = useState(cloud ? "파일에서 자동 분석" : "현대 판타지"),
     [file, setFile] = useState<File | null>(null);
   const [drag, setDrag] = useState(false);
   return (
@@ -1079,24 +1080,29 @@ function CreateProject({
           run(async () => {
             if (!file) return;
             const form = new FormData();
-            form.set("title", title);
+            form.set(
+              "title",
+              title.trim() ||
+                file.name.replace(/\.[^.]+$/, "").slice(0, 100) ||
+                "새로운 이야기",
+            );
             form.set("genre", genre);
             form.set("file", file);
             const p = await api("/projects", { method: "POST", body: form });
-            notify("원문을 보존하고 새 기획을 만들었습니다.");
+            notify("파일을 저장했습니다. 바로 기획안으로 다듬어보세요.");
             done(p);
           });
         }}
       >
         <div className="modal-body">
           <p className="muted">
-            장르, 콘셉트, 주요 스토리, 원하는 화수를 TXT에 담아주세요. 원문은
-            수정하지 않고 보존합니다.
+            아이디어나 설정 메모를 파일로 올리세요. 주인공·인물·장르·문체를
+            추출하고 첫 10화로 이어갑니다. 원문은 보존합니다.
           </p>
           <label>
-            작품 가제
+            작품 가제 {cloud && "· 선택"}
             <input
-              required
+              required={!cloud}
               maxLength={100}
               value={title}
               onChange={(e) => setTitle(e.target.value)}
@@ -1107,6 +1113,7 @@ function CreateProject({
             장르
             <select value={genre} onChange={(e) => setGenre(e.target.value)}>
               {[
+                ...(cloud ? ["파일에서 자동 분석"] : []),
                 "현대 판타지",
                 "아카데미",
                 "무협",
@@ -1134,11 +1141,14 @@ function CreateProject({
             }}
           >
             <BookOpen size={28} />
-            <strong>{file ? file.name : "아이디어 TXT를 놓아주세요"}</strong>
-            <span>또는 클릭해서 파일 선택 · UTF-8 / CP949 · 최대 4만 자</span>
+            <strong>{file ? file.name : "아이디어 파일을 놓아주세요"}</strong>
+            <span>
+              또는 클릭해서 선택 · {cloud ? "TXT / MD / DOCX / PDF" : "TXT"} ·
+              본문 최대 4만 자
+            </span>
             <input
               type="file"
-              accept=".txt,text/plain"
+              accept={cloud ? ".txt,.md,.docx,.pdf" : ".txt,text/plain"}
               aria-label="아이디어 TXT 파일"
               onChange={(e) => setFile(e.target.files?.[0] || null)}
             />
@@ -1150,9 +1160,12 @@ function CreateProject({
               작성되지 않습니다.
             </span>
           </div>
-          <Button type="submit" disabled={!title.trim() || !file || busy}>
+          <Button
+            type="submit"
+            disabled={(!cloud && !title.trim()) || !file || busy}
+          >
             <Plus size={17} />
-            기획 초안 만들기
+            {cloud ? "파일로 시작하기" : "기획 초안 만들기"}
           </Button>
         </div>
       </form>

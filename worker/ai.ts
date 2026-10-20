@@ -35,6 +35,7 @@ const schemas: Record<string, string> = {
   plot_develop: "PlotDevelopment",
   plot_develop_check: "PlotGaps",
   synopsis: "SynopsisBatch",
+  launch_plan: "LaunchPlan",
   review: "Review",
   rewrite: "Rewrite",
 };
@@ -52,6 +53,7 @@ const templates: Record<string, string> = {
   plot_develop: "PLOT_DEVELOPER",
   plot_develop_check: "PLOT_DEVELOPMENT_CHECK",
   synopsis: "SYNOPSIS_BATCH",
+  launch_plan: "LAUNCH_PLAN",
   write: "CHAPTER_SCENE_WRITER_SYSTEM",
   review: "CHAPTER_REVIEWER",
   rewrite: "PARTIAL_REWRITER",
@@ -70,6 +72,7 @@ const roles: Record<string, string> = {
   plot_develop: "story",
   plot_develop_check: "story",
   synopsis: "story",
+  launch_plan: "planning",
   write: "writing",
   review: "review",
   rewrite: "editing",

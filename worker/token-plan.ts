@@ -50,6 +50,7 @@ export function tokenPlan(
     plot_develop: [3072, 16384],
     plot_develop_check: [1024, 4096],
     synopsis: [3072, 12288],
+    launch_plan: [2048, 8192],
     bible_audit: [4096, 8192],
     auto_plan: [3072, 24576],
     tree_foundation: [3072, 16384],

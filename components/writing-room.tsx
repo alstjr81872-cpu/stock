@@ -42,6 +42,12 @@ export default function WritingRoom({
     [proposal, setProposal] = useState<any>(null),
     [confirmed, setConfirmed] = useState(false),
     [fork, setFork] = useState(false);
+  const [verifiedSeeds, setVerifiedSeeds] = useState<Record<string, boolean>>(
+    {},
+  );
+  useEffect(() => {
+    setVerifiedSeeds({});
+  }, [ch?.contentHash]);
   const chRef = useRef<any>(null),
     textRef = useRef(""),
     titleRef = useRef(""),
@@ -50,7 +56,8 @@ export default function WritingRoom({
     lastChange = useRef(0);
   const base = "/projects/" + p.id;
   const episode = p.currentEpisode ?? 1;
-  const episodePath = (path: string) => base + path + "?episode=" + episode;
+  const episodePath = (path: string) =>
+    base + path + "?episode=" + episode + "&story=" + (p.storyRevision ?? 0);
   function adopt(data: any) {
     chRef.current = data;
     textRef.current = data.content;
@@ -180,6 +187,16 @@ export default function WritingRoom({
   );
   const count = [...text].length,
     nonspace = [...text.replace(/\s/g, "")].length;
+  const storyBeats = [
+    ...(p.episodeSynopsis?.seedPlants ?? []).map((b: any) => ({
+      ...b,
+      kind: "투척",
+    })),
+    ...(p.episodeSynopsis?.seedPayoffs ?? []).map((b: any) => ({
+      ...b,
+      kind: "회수",
+    })),
+  ];
   return (
     <>
       <div className="section-heading">
@@ -465,6 +482,30 @@ export default function WritingRoom({
             </div>
             <div className="panel">
               <h3>회차 확정</h3>
+              {storyBeats.map((beat: any) => (
+                <div key={beat.seedId}>
+                  <p>
+                    <strong>복선 {beat.kind}</strong> ·{" "}
+                    {p.foreshadowing?.find((s: any) => s.id === beat.seedId)
+                      ?.title ?? beat.seedId}
+                  </p>
+                  <p>{beat.action}</p>
+                  <label className="checkbox">
+                    <input
+                      type="checkbox"
+                      checked={!!verifiedSeeds[beat.seedId]}
+                      onChange={(e) =>
+                        setVerifiedSeeds({
+                          ...verifiedSeeds,
+                          [beat.seedId]: e.target.checked,
+                        })
+                      }
+                    />
+                    원고에서 이 복선의 {beat.kind}
+                    {beat.kind === "회수" ? "를" : "을"} 확인했습니다.
+                  </label>
+                </div>
+              ))}
               <label className="checkbox">
                 <input
                   type="checkbox"
@@ -474,7 +515,12 @@ export default function WritingRoom({
                 원고와 검토 근거를 직접 확인했고 이 버전을 확정합니다.
               </label>
               <Button
-                disabled={!confirmed || busy || ch.status === "APPROVED"}
+                disabled={
+                  !confirmed ||
+                  busy ||
+                  ch.status === "APPROVED" ||
+                  storyBeats.some((b: any) => !verifiedSeeds[b.seedId])
+                }
                 onClick={() =>
                   run(async () => {
                     if (!(await flush())) return;
@@ -482,6 +528,9 @@ export default function WritingRoom({
                       revision: chRef.current.revision,
                       confirmed: true,
                       reviewed: true,
+                      verifiedSeeds: Object.keys(verifiedSeeds).filter(
+                        (id) => verifiedSeeds[id],
+                      ),
                     });
                     adopt(result);
                     setFork(false);

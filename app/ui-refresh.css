@@ -1921,3 +1921,39 @@ pre {
 .series-planner .scene-grid {
   margin-top: 20px;
 }
+
+.launch-planning > .panel {
+  margin: 20px 0;
+}
+.launch-planning .modal-body > label,
+.launch-planning details label {
+  display: grid;
+  gap: 8px;
+  margin: 18px 0;
+}
+.launch-planning textarea {
+  width: 100%;
+  resize: vertical;
+}
+.launch-planning .panel p {
+  line-height: 1.85;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.ledger-table-wrap {
+  width: 100%;
+  overflow-x: auto;
+}
+.foreshadow-ledger table {
+  min-width: 650px;
+  width: 100%;
+  border-collapse: collapse;
+}
+.foreshadow-ledger th,
+.foreshadow-ledger td {
+  padding: 14px;
+  vertical-align: top;
+  border-bottom: 1px solid #383244;
+  text-align: left;
+  line-height: 1.7;
+}

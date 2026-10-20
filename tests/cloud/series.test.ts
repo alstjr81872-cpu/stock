@@ -33,3 +33,17 @@ test("a following synopsis block requires all ten prior episodes, not merely epi
   assert.equal(state.canExtend, true);
   assert.equal(state.nextStart, 11);
 });
+test("length preserves a short opening and pays more space to the main confrontation", () => {
+  const plot = structuredClone(fixtures.plot);
+  plot.scenes[0].targetChars = 500;
+  plot.scenes[1].targetChars = 2500;
+  assert.deepEqual(
+    fitLength(plot, 6000).scenes.map((s: any) => s.targetChars),
+    [1000, 5000],
+  );
+  const tight = fitLength(plot, 400);
+  assert.deepEqual(
+    tight.scenes.map((s: any) => s.targetChars),
+    [200, 200],
+  );
+});

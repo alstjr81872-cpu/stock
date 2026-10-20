@@ -112,6 +112,8 @@ class Scene(Strict):
     readerPayoff: str
     hiddenInformation: list[str]
     targetChars: int = Field(ge=200, le=5000)
+    seedPlants: list[str] = Field(default_factory=list)
+    seedPayoffs: list[str] = Field(default_factory=list)
 
 
 class Plot(Strict):
@@ -158,11 +160,66 @@ class EpisodeSynopsis(Strict):
     synopsis: str = Field(min_length=40, max_length=3000)
     characterChange: str = Field(min_length=10, max_length=1000)
     endingHook: str = Field(min_length=10, max_length=1000)
+    openingHook: str = Field(default='', max_length=1500)
+    readerPayoff: str = Field(default='', max_length=1500)
+    seedPlants: list['SeedBeat'] = Field(default_factory=list)
+    seedPayoffs: list['SeedBeat'] = Field(default_factory=list)
+
+
+class SeedBeat(Strict):
+    seedId: str
+    action: str = Field(min_length=10, max_length=2000)
+
+
+class SeedPlan(Strict):
+    id: str = Field(pattern=r'^seed-[A-Za-z0-9_-]{1,60}$')
+    title: str = Field(min_length=1, max_length=150)
+    plantEpisode: int = Field(ge=1)
+    payoffEpisode: int = Field(ge=1)
+    plantMethod: str = Field(min_length=10, max_length=2000)
+    payoffMethod: str = Field(min_length=10, max_length=2000)
+
+
+class StoryFact(Strict):
+    id: str = Field(pattern=r'^[A-Za-z0-9_-]{1,80}$')
+    statement: str = Field(min_length=10, max_length=2000)
+    introducedEpisode: int = Field(ge=0)
 
 
 class SynopsisBatch(Strict):
     summary: str = Field(min_length=10, max_length=3000)
     episodes: list[EpisodeSynopsis] = Field(min_length=10, max_length=10)
+    seeds: list[SeedPlan] = Field(default_factory=list, max_length=20)
+    worldFacts: list[StoryFact] = Field(default_factory=list, max_length=30)
+
+
+class LaunchCharacter(Strict):
+    id: str = Field(pattern=r'^[A-Za-z0-9_-]{1,80}$')
+    name: str = Field(min_length=1, max_length=100)
+    role: str = Field(min_length=1, max_length=300)
+    desire: str = Field(min_length=10, max_length=1500)
+    contradiction: str = Field(min_length=10, max_length=1500)
+    voice: str = Field(min_length=10, max_length=1500)
+    background: str = Field(min_length=10, max_length=2000)
+
+
+class LaunchPlan(Strict):
+    title: str = Field(min_length=1, max_length=200)
+    genre: str = Field(min_length=1, max_length=300)
+    logline: str = Field(min_length=20, max_length=2000)
+    readerPromise: str = Field(min_length=20, max_length=2000)
+    protagonistId: str
+    characters: list[LaunchCharacter] = Field(min_length=1, max_length=15)
+    style: str = Field(min_length=30, max_length=3000)
+    opening: str = Field(min_length=30, max_length=3000)
+    storyEngine: str = Field(min_length=20, max_length=2000)
+    worldRules: list[str] = Field(default_factory=list, max_length=12)
+    sourceConflicts: list[str] = Field(default_factory=list, max_length=20)
+
+
+class ApplyLaunch(Confirm):
+    proposalId: str
+    plan: LaunchPlan
 
 
 class SelectEpisode(Revision):
@@ -230,6 +287,7 @@ class ChapterSave(Revision):
 
 
 class ChapterApprove(Confirm):
+    verifiedSeeds: list[str] = Field(default_factory=list)
     reviewed: bool
 
 

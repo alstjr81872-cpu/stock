@@ -26,7 +26,7 @@ import { api, send, modules, statuses, date, download } from "@/lib/api";
 import { Badge, Empty, Modal, useActions } from "./workspace";
 import { Button } from "./ui/button";
 import WritingRoom from "./writing-room";
-import PlanningTree from "./planning-tree";
+import LaunchPlanning from "./launch-planning";
 import SeriesPlanner from "./series-planner";
 export default function ProjectView({
   id,
@@ -49,6 +49,7 @@ export default function ProjectView({
     [analysisEdit, setAnalysisEdit] = useState<string | null>(null),
     [planningProposal, setPlanningProposal] = useState<any>(null);
   const [development, setDevelopment] = useState<any>(null);
+  const [startSynopsis, setStartSynopsis] = useState(false);
   const [developmentAudit, setDevelopmentAudit] = useState<any>(null),
     [developmentPhase, setDevelopmentPhase] = useState(""),
     [developmentError, setDevelopmentError] = useState("");
@@ -142,12 +143,19 @@ export default function ProjectView({
         작품을 불러오는 중…
       </div>
     );
-  const steps = [
-    { key: "brief", title: "아이디어 · 인터뷰", icon: FileText },
-    { key: "bible", title: "작품 기획서", icon: BookOpen },
-    { key: "plot", title: "스토리 설계", icon: GitBranch },
-    { key: "writing", title: "집필실", icon: Feather },
-  ];
+  const steps =
+    mode === "supabase"
+      ? [
+          { key: "brief", title: "파일 · 기획안", icon: FileText },
+          { key: "plot", title: "10화 시놉시스", icon: GitBranch },
+          { key: "writing", title: "집필", icon: Feather },
+        ]
+      : [
+          { key: "brief", title: "아이디어 · 인터뷰", icon: FileText },
+          { key: "bible", title: "작품 기획서", icon: BookOpen },
+          { key: "plot", title: "스토리 설계", icon: GitBranch },
+          { key: "writing", title: "집필실", icon: Feather },
+        ];
   const doneSections = Object.keys(p.bible || {}).length;
   const mapped = new Set(
     Object.values(p.bible || {}).flatMap((s: any) => s.requirementIds),
@@ -251,11 +259,24 @@ export default function ProjectView({
                   <small>STEP 0{i + 1}</small>
                   {s.title}
                 </span>
-                {i < 3 && <ChevronRight size={15} />}
+                {i < steps.length - 1 && <ChevronRight size={15} />}
               </button>
             ))}
           </div>
-          {tab === "brief" && (
+          {tab === "brief" && mode === "supabase" && (
+            <LaunchPlanning
+              project={p}
+              onUpdate={async (data) => {
+                setP(data);
+                await refresh();
+              }}
+              onContinue={() => {
+                setTab("plot");
+                setStartSynopsis(true);
+              }}
+            />
+          )}
+          {tab === "brief" && mode !== "supabase" && (
             <div className="workspace-columns">
               <section>
                 <div className="panel">
@@ -413,16 +434,6 @@ export default function ProjectView({
                 )}
               </section>
             </div>
-          )}
-          {tab === "bible" && mode === "supabase" && (
-            <PlanningTree
-              project={p}
-              onUpdate={async (result) => {
-                setP(result);
-                await refresh();
-              }}
-              onContinue={() => setTab("plot")}
-            />
           )}
           {tab === "bible" && mode !== "supabase" && (
             <>
@@ -722,6 +733,8 @@ export default function ProjectView({
             ["plot", "writing"].includes(tab) && (
               <SeriesPlanner
                 project={p}
+                autoStart={startSynopsis}
+                onAutoStarted={() => setStartSynopsis(false)}
                 onUpdate={async (data) => {
                   setP(data);
                   await refresh();
@@ -888,7 +901,9 @@ export default function ProjectView({
                                     "/prompt/" +
                                     s.id +
                                     "?episode=" +
-                                    (p.currentEpisode ?? 1),
+                                    (p.currentEpisode ?? 1) +
+                                    "&story=" +
+                                    (p.storyRevision ?? 0),
                                 ),
                               ),
                             )
@@ -965,7 +980,7 @@ export default function ProjectView({
           )}
           {tab === "writing" && (
             <WritingRoom
-              key={p.currentEpisode ?? 1}
+              key={`${p.storyRevision ?? 0}:${p.currentEpisode ?? 1}`}
               project={p}
               reloadProject={load}
               onNext={mode === "supabase" ? nextEpisode : undefined}

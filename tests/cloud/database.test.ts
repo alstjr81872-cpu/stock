@@ -10,6 +10,7 @@ import { validate } from "../../worker/validation";
 import fixtures from "./fixtures.json";
 import { generate, settleUsage } from "../../worker/ai";
 import { seedTree } from "../../worker/tree";
+import { launchPlan, seedPlan, storyBatch } from "./launch-fixtures";
 const uid = "11111111-1111-4111-8111-111111111111",
   other = "22222222-2222-4222-8222-222222222222";
 const env: any = {
@@ -1941,6 +1942,291 @@ test("ten-episode synopsis records drive separate chapter drafts, length and con
     assert.equal(
       ((await handleApi(request("/synopsis"), s)) as any).batches.length,
       2,
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("file-to-plan launches a preserved story version and carries episode-nine setup to episode-seventeen verified payoff", async () => {
+  const s = store(),
+    originalFetch = globalThis.fetch;
+  const form = new FormData();
+  form.set("title", "파일 기획");
+  form.set("genre", "파일에서 자동 분석");
+  const source =
+    "# 아카데미 기획\n공병 출신 빙의자가 누명을 기지로 뒤집는다. 주인공 이름은 카일 베르너다.";
+  form.set("file", new File([source], "idea.md"));
+  let p: any = await handleApi(req("/projects", form), s),
+    pid = p.id;
+  await s.create(`projects/${pid}/chapters/chapter-1`, {
+    id: "chapter-1",
+    status: "APPROVED",
+    content: "보존해야 하는 예전 원고",
+    number: 1,
+  });
+  const account = await s.get("account");
+  await s.change("account", account.revision, (d) => {
+    d.rate = {};
+  });
+  let output: any = structuredClone(launchPlan),
+    paid = 0;
+  globalThis.fetch = async () => {
+    paid++;
+    return Response.json({
+      choices: [
+        {
+          finish_reason: "stop",
+          message: {
+            content:
+              typeof output === "string" ? output : JSON.stringify(output),
+          },
+        },
+      ],
+      usage: { cost: 0 },
+    });
+  };
+  const call = (path: string, body?: any, method?: string, number?: number) =>
+    handleApi(
+      req(
+        `/projects/${pid}${path}${number ? `?episode=${number}&story=1` : ""}`,
+        body,
+        method,
+      ),
+      s,
+    );
+  try {
+    await assert.rejects(
+      handleApi(
+        req(`/projects/${pid}/launch/generate`, {
+          revision: p.revision,
+          consent: false,
+          maxCostUsd: 5,
+        }),
+        new Store(env, uid, transport, true),
+      ),
+      (e: any) => e instanceof QuoteReady,
+    );
+    assert.equal(paid, 0);
+    const proposal: any = await call("/launch/generate", {
+      revision: p.revision,
+      consent: true,
+      maxCostUsd: 1,
+    });
+    assert.equal((await s.get(`projects/${pid}`)).launchPlan, undefined);
+    p = await call("/launch/apply", {
+      revision: p.revision,
+      proposalId: proposal.id,
+      plan: launchPlan,
+      confirmed: true,
+    });
+    assert.equal(p.planningMode, "launch");
+    assert.equal(p.status, "ACTIVE");
+    assert.equal(p.storyRevision, 1);
+    assert.equal(p.styleBinding.source, "launch");
+    assert.equal(p.analysis, null);
+    assert.equal(p.brief.text, source);
+    assert.equal(
+      (await s.get(`projects/${pid}/chapters/chapter-1`)).content,
+      "보존해야 하는 예전 원고",
+    );
+    assert.equal(
+      (await s.list(`projects/${pid}/launch_history`))[0].beforeProject.brief
+        .text,
+      source,
+    );
+    output = storyBatch(1);
+    const first: any = await call("/synopsis/generate", {
+      revision: p.revision,
+      consent: true,
+      maxCostUsd: 1,
+    });
+    p = await call("/synopsis/apply", {
+      revision: p.revision,
+      proposalId: first.id,
+      confirmed: true,
+    });
+    assert.equal(p.foreshadowing[0].payoffEpisode, 17);
+    assert.equal(p.foreshadowing[0].status, "planned");
+    output = structuredClone(fixtures.plot);
+    p = await call("/plot/generate", {
+      revision: p.revision,
+      consent: true,
+      maxCostUsd: 1,
+    });
+    p = await call("/plot/approve", { revision: p.revision, confirmed: true });
+    const context: any = await call("/prompt/s1", undefined, "GET", 1);
+    assert.equal(context.layers.L3.common_planning_tree, null);
+    assert.equal(context.layers.L3.story.plan.protagonistId, "person_main");
+    assert(
+      !context.layers.L3.story.worldFacts.some(
+        (f: any) => f.id === "fact-pass",
+      ),
+    );
+    output = fixtures.write;
+    let ch: any = await call(
+      "/scenes/s1/write",
+      { revision: p.revision, consent: true, maxCostUsd: 1 },
+      "POST",
+      1,
+    );
+    ch = await call(
+      "/scenes/s2/write",
+      { revision: p.revision, consent: true, maxCostUsd: 1 },
+      "POST",
+      1,
+    );
+    assert.equal(ch.id, "story-1-chapter-1");
+    assert.equal(
+      (await s.get(`projects/${pid}/chapters/chapter-1`)).content,
+      "보존해야 하는 예전 원고",
+    );
+    output = {
+      findings: [],
+      strengths: ["선택이 드러난다."],
+      summary: "작은 반격으로 첫 단서를 손에 넣었다.",
+      requiresHuman: false,
+    };
+    ch = await call(
+      "/chapter/review",
+      { revision: ch.revision, consent: true, maxCostUsd: 1 },
+      "POST",
+      1,
+    );
+    await call(
+      "/chapter/approve",
+      { revision: ch.revision, confirmed: true, reviewed: true },
+      "POST",
+      1,
+    );
+    p = await s.get(`projects/${pid}`);
+    for (let n = 2; n <= 16; n++)
+      await s.create(`projects/${pid}/chapters/story-1-chapter-${n}`, {
+        id: `story-1-chapter-${n}`,
+        number: n,
+        storyRevision: 1,
+        status: "APPROVED",
+        title: `${n}화`,
+        content: "인물의 선택과 단서를 이어 온 확정 원고",
+        review: { summary: "증거를 찾아 다음 사건을 열었다." },
+      });
+    p = await s.change(`projects/${pid}`, p.revision, (d) => {
+      d.currentEpisode = 10;
+      d.plot = null;
+      d.completedEpisodes = Array.from({ length: 10 }, (_, i) => i + 1);
+      d.foreshadowing[0].status = "planted";
+      d.foreshadowing[0].plantedIn = {
+        chapterId: "story-1-chapter-9",
+        contentHash: "setup-proof",
+      };
+    });
+    const missed = storyBatch(11);
+    missed.episodes[6].seedPayoffs = [];
+    output = missed;
+    await assert.rejects(
+      call("/synopsis/generate", {
+        revision: p.revision,
+        consent: true,
+        maxCostUsd: 1,
+      }),
+      (e: any) => e.status === 422,
+    );
+    output = storyBatch(11);
+    const second: any = await call("/synopsis/generate", {
+      revision: p.revision,
+      consent: true,
+      maxCostUsd: 1,
+    });
+    p = await call("/synopsis/apply", {
+      revision: p.revision,
+      proposalId: second.id,
+      confirmed: true,
+    });
+    p = await call("/episodes/select", { revision: p.revision, number: 17 });
+    assert.equal(p.episodeSynopsis.seedPayoffs[0].seedId, seedPlan.id);
+    const plot: any = structuredClone(fixtures.plot);
+    plot.scenes[0].seedPayoffs = [seedPlan.id];
+    output = plot;
+    p = await call("/plot/generate", {
+      revision: p.revision,
+      consent: true,
+      maxCostUsd: 1,
+    });
+    p = await call("/plot/approve", { revision: p.revision, confirmed: true });
+    const payoff: any = await call("/prompt/s1", undefined, "GET", 17);
+    assert.equal(
+      payoff.layers.L3.story.payoffs[0].payoffMethod,
+      seedPlan.payoffMethod,
+    );
+    output = fixtures.write;
+    ch = await call(
+      "/scenes/s1/write",
+      { revision: p.revision, consent: true, maxCostUsd: 1 },
+      "POST",
+      17,
+    );
+    ch = await call(
+      "/scenes/s2/write",
+      { revision: p.revision, consent: true, maxCostUsd: 1 },
+      "POST",
+      17,
+    );
+    output = {
+      findings: [],
+      strengths: [],
+      summary: "인장을 반전 증거로 사용했다.",
+      requiresHuman: false,
+    };
+    ch = await call(
+      "/chapter/review",
+      { revision: ch.revision, consent: true, maxCostUsd: 1 },
+      "POST",
+      17,
+    );
+    await assert.rejects(
+      call(
+        "/chapter/approve",
+        { revision: ch.revision, confirmed: true, reviewed: true },
+        "POST",
+        17,
+      ),
+      (e: any) => e.status === 422,
+    );
+    await call(
+      "/chapter/approve",
+      {
+        revision: ch.revision,
+        confirmed: true,
+        reviewed: true,
+        verifiedSeeds: [seedPlan.id],
+      },
+      "POST",
+      17,
+    );
+    p = await s.get(`projects/${pid}`);
+    assert.equal(p.foreshadowing[0].status, "paid");
+    assert.equal(p.foreshadowing[0].paidIn.chapterId, "story-1-chapter-17");
+    assert.equal(p.foreshadowing[0].paidIn.verifiedByAuthor, true);
+    await assert.rejects(
+      handleApi(req(`/projects/${pid}/chapter?episode=17&story=0`), s),
+      (e: any) => e.status === 409,
+    );
+    const draft: any = await call("/launch/draft", { revision: p.revision });
+    p = await call("/launch/apply", {
+      revision: p.revision,
+      proposalId: draft.id,
+      plan: launchPlan,
+      confirmed: true,
+    });
+    assert.equal(p.storyRevision, 2);
+    assert.equal(((await call("/synopsis")) as any).batches.length, 0);
+    assert.equal(
+      (await s.get(`projects/${pid}/chapters/story-1-chapter-17`)).status,
+      "APPROVED",
+    );
+    assert.equal(
+      (await s.get(`projects/${pid}/chapters/chapter-1`)).content,
+      "보존해야 하는 예전 원고",
     );
   } finally {
     globalThis.fetch = originalFetch;
